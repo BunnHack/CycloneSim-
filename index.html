@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Cyclone Simulator</title>
+    <!-- unpkg and local scripts that are global and static -->
+    <script src="moment.min.js"></script>
+    <script src="https://unpkg.com/dexie@latest/dist/dexie.js"></script>
+    
+    <!-- Vite loads and transpiles src/app-all.ts directly -->
+    <script type="module" src="/src/app-all.ts"></script>
+    
+    <link type="text/css" rel="stylesheet" href="style.css" />
+    <link type="image/x-icon" rel="shortcut icon" href="favicon.ico" />
+  </head>
+  <body>
+    <div id="react-root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+    <a id="version"></a>
+  </body>
+</html>

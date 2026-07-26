@@ -1,0 +1,26 @@
+{
+  "name": "cyclone-simulator",
+  "version": "1.0.0",
+  "description": "An interactive cyclone/hurricane simulator in TypeScript without p5.js.",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "build": "node build-bundle.js && vite build",
+    "lint": "echo 'No lint step required'",
+    "dev": "node build-bundle.js && vite",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "express": "^4.19.2",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "tailwindcss": "^4.3.3"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "typescript": "^5.4.5",
+    "vite": "^5.2.11"
+  }
+}

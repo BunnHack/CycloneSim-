@@ -1,0 +1,67 @@
+@import "tailwindcss";
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: #0f172a; /* Slate 900 */
+  font-family: Calibri, Arial, sans-serif;
+}
+
+#defaultCanvas0 {
+  display: block;
+  aspect-ratio: 16 / 9;
+  width: 100vw;
+  height: 56.25vw; /* 9 / 16 = 0.5625 */
+  max-width: 177.78vh; /* 16 / 9 = 1.7778 */
+  max-height: 100vh;
+  object-fit: contain;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
+  background: #000;
+}
+
+a {
+  display: inline-block;
+  text-decoration: none;
+  color: #38bdf8; /* sky 400 */
+}
+
+#version {
+  position: fixed;
+  bottom: 0px;
+  right: 0px;
+  color: #64748b; /* slate 500 */
+  padding: 10px;
+  z-index: 100;
+  user-select: none;
+  -moz-user-select: none;
+  -webkit-user-select: none;
+  -ms-user-select: none;
+}
+
+a:after {
+  display: block;
+  content: '';
+  border-bottom: solid 1px #38bdf8;
+  transform: scaleX(0);
+  transition: transform 300ms;
+}
+
+a:hover, a#version:hover {
+  color: #e2e8f0;
+  transform-origin: 50% 50%;
+}
+
+a:hover:after {
+  transform: scaleX(1);
+}
+
+ul {
+  list-style: none;
+  text-align: center;
+}
