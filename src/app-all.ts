@@ -514,13 +514,19 @@ class CanvasBuffer extends PImage {
     this.currentDrawingState.colorModeVal = normalizeColorMode(mode);
   }
 
-  textSize(s: number) {
-    this.currentDrawingState.textSizeVal = s;
-    this.ctx.font = `${s}px ${this.currentDrawingState.textFontVal}`;
+  textSize(s?: number) {
+    if (s !== undefined) {
+      this.currentDrawingState.textSizeVal = s;
+      this.ctx.font = `${s}px ${this.currentDrawingState.textFontVal}`;
+    }
+    return this.currentDrawingState.textSizeVal;
   }
 
-  textLeading(leading: number) {
-    this.currentDrawingState.textLeadingVal = leading;
+  textLeading(leading?: number) {
+    if (leading !== undefined) {
+      this.currentDrawingState.textLeadingVal = leading;
+    }
+    return this.currentDrawingState.textLeadingVal;
   }
 
   textAlign(h: string, v?: string) {
@@ -552,9 +558,12 @@ class CanvasBuffer extends PImage {
     }
   }
 
-  textFont(f: string) {
-    this.currentDrawingState.textFontVal = f;
-    this.ctx.font = `${this.currentDrawingState.textSizeVal}px ${f}`;
+  textFont(f?: string) {
+    if (f !== undefined) {
+      this.currentDrawingState.textFontVal = f;
+      this.ctx.font = `${this.currentDrawingState.textSizeVal}px ${f}`;
+    }
+    return this.currentDrawingState.textFontVal;
   }
 
   textWidth(str: any): number {
@@ -740,10 +749,6 @@ class CanvasBuffer extends PImage {
     this.ctx.font = `${this.currentDrawingState.textSizeVal}px ${this.currentDrawingState.textFontVal}`;
   }
 
-  textLeading(leading: number) {
-    // no-op
-  }
-
   private shapePoints: { type: string, args: number[] }[] = [];
 
   beginShape() {
@@ -819,9 +824,9 @@ const triangle = (x1: number, y1: number, x2: number, y2: number, x3: number, y3
 const quad = (x1: number, y1: number, x2: number, y2: number, x3: number, y3: number, x4: number, y4: number) => mainCanvasBuffer.quad(x1, y1, x2, y2, x3, y3, x4, y4);
 const point = (x: number, y: number) => mainCanvasBuffer.point(x, y);
 const text = (str: any, x: number, y: number) => mainCanvasBuffer.text(str, x, y);
-const textSize = (s: number) => mainCanvasBuffer.textSize(s);
+const textSize = (s?: number) => mainCanvasBuffer.textSize(s);
 const textAlign = (h: string, v?: string) => mainCanvasBuffer.textAlign(h, v);
-const textFont = (f: string) => mainCanvasBuffer.textFont(f);
+const textFont = (f?: string) => mainCanvasBuffer.textFont(f);
 const image = (img: any, x: number, y: number, w?: number, h?: number) => mainCanvasBuffer.image(img, x, y, w, h);
 const resizeCanvas = (w: number, h: number) => mainCanvasBuffer.resizeCanvas(w, h);
 const createGraphics = (w: number, h: number) => new CanvasBuffer(w, h);
@@ -1198,7 +1203,7 @@ const bezierVertex = (x2: number, y2: number, x3: number, y3: number, x4: number
 const endShape = (mode?: string) => mainCanvasBuffer.endShape(mode);
 const circle = (x: number, y: number, d: number) => mainCanvasBuffer.circle(x, y, d);
 const textStyle = (style: string) => mainCanvasBuffer.textStyle(style);
-const textLeading = (leading: number) => mainCanvasBuffer.textLeading(leading);
+const textLeading = (leading?: number) => mainCanvasBuffer.textLeading(leading);
 const erase = (strengthFill?: number, strengthStroke?: number) => mainCanvasBuffer.erase(strengthFill, strengthStroke);
 const noErase = () => mainCanvasBuffer.noErase();
 
