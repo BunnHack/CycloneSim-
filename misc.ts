@@ -59,12 +59,28 @@ function drawBuffer(b){
     image(b,0,0,WIDTH,HEIGHT);
 }
 
-function getMouseX(){
+function getScreenMouseX(){
     return floor(mouseX/scaler);
 }
 
-function getMouseY(){
+function getScreenMouseY(){
     return floor(mouseY/scaler);
+}
+
+function getMapMouseX(){
+    return floor(((mouseX/scaler) - mapPanX) / mapZoom);
+}
+
+function getMapMouseY(){
+    return floor(((mouseY/scaler) - mapPanY) / mapZoom);
+}
+
+function getMouseX(){
+    return getMapMouseX();
+}
+
+function getMouseY(){
+    return getMapMouseY();
 }
 
 function coordinateInCanvas(x,y,isPixelCoordinate){

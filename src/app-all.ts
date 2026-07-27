@@ -73,6 +73,67 @@ let key = '';
 let keyCode = 0;
 let deviceOrientation = 'landscape';
 
+let mapZoom = 1;
+let mapPanX = 0;
+let mapPanY = 0;
+let isPanningMap = false;
+let panStartX = 0;
+let panStartY = 0;
+let initialPanX = 0;
+let initialPanY = 0;
+let hasDraggedMap = false;
+
+function constrainPan() {
+  if (mapZoom <= 1) {
+    mapZoom = 1;
+    mapPanX = 0;
+    mapPanY = 0;
+    return;
+  }
+  const minPanX = 1440 * (1 - mapZoom);
+  const maxPanX = 0;
+  const minPanY = 720 * (1 - mapZoom);
+  const maxPanY = 0;
+
+  mapPanX = Math.min(Math.max(mapPanX, minPanX), maxPanX);
+  mapPanY = Math.min(Math.max(mapPanY, minPanY), maxPanY);
+}
+
+function zoomMapAt(factor: number, screenX?: number, screenY?: number) {
+  if (screenX === undefined) screenX = 1440 / 2;
+  if (screenY === undefined) screenY = 720 / 2;
+
+  const oldZoom = mapZoom;
+  let newZoom = mapZoom * factor;
+  newZoom = Math.min(Math.max(newZoom, 1), 10);
+  if (Math.abs(newZoom - 1) < 0.01) {
+    newZoom = 1;
+  }
+
+  if (newZoom === 1) {
+    mapZoom = 1;
+    mapPanX = 0;
+    mapPanY = 0;
+    return;
+  }
+
+  const mapX = (screenX - mapPanX) / oldZoom;
+  const mapY = (screenY - mapPanY) / oldZoom;
+
+  mapZoom = newZoom;
+  mapPanX = screenX - mapX * newZoom;
+  mapPanY = screenY - mapY * newZoom;
+
+  constrainPan();
+}
+
+function resetMapZoom() {
+  mapZoom = 1;
+  mapPanX = 0;
+  mapPanY = 0;
+  hasDraggedMap = false;
+}
+
 // Math wrappers
 const floor = Math.floor;
 const ceil = Math.ceil;
@@ -318,43 +379,71 @@ function rgbToHsb(r: number, g: number, b: number): [number, number, number] {
   ];
 }
 
-function brightness(c: Color | number): number {
-  if (typeof c === 'number') return c;
-  if (isHSBMode(c.mode)) return c.b;
-  const hsb = rgbToHsb(c.r, c.g, c.b);
-  return hsb[2];
-}
+type ColorInput = Color | string | number;
 
-function red(c: Color | number): number {
-  if (typeof c === 'number') return c;
-  if (isHSBMode(c.mode)) {
-    const rgb = hsbToRgb(c.r, c.g, c.b);
-    return rgb[0];
+function resolveColorInput(value: ColorInput): Color {
+  if (value instanceof Color) {
+    return value;
   }
-  return c.r;
-}
-
-function green(c: Color | number): number {
-  if (typeof c === 'number') return c;
-  if (isHSBMode(c.mode)) {
-    const rgb = hsbToRgb(c.r, c.g, c.b);
-    return rgb[1];
+  if (typeof value === 'string') {
+    const [cr, cg, cb, ca] = parseCSSColor(value);
+    return new Color(cr, cg, cb, ca, 'RGB');
   }
-  return c.g;
+  return new Color(value, value, value, 1, 'RGB');
 }
 
-function blue(c: Color | number): number {
+function brightness(c: ColorInput): number {
   if (typeof c === 'number') return c;
-  if (isHSBMode(c.mode)) {
-    const rgb = hsbToRgb(c.r, c.g, c.b);
-    return rgb[2];
+
+  const parsed = resolveColorInput(c);
+
+  if (isHSBMode(parsed.mode)) {
+    return parsed.b;
   }
-  return c.b;
+
+  return rgbToHsb(parsed.r, parsed.g, parsed.b)[2];
 }
 
-function alpha(c: Color | number): number {
+function red(c: ColorInput): number {
+  if (typeof c === 'number') return c;
+
+  const parsed = resolveColorInput(c);
+
+  if (isHSBMode(parsed.mode)) {
+    return hsbToRgb(parsed.r, parsed.g, parsed.b)[0];
+  }
+
+  return parsed.r;
+}
+
+function green(c: ColorInput): number {
+  if (typeof c === 'number') return c;
+
+  const parsed = resolveColorInput(c);
+
+  if (isHSBMode(parsed.mode)) {
+    return hsbToRgb(parsed.r, parsed.g, parsed.b)[1];
+  }
+
+  return parsed.g;
+}
+
+function blue(c: ColorInput): number {
+  if (typeof c === 'number') return c;
+
+  const parsed = resolveColorInput(c);
+
+  if (isHSBMode(parsed.mode)) {
+    return hsbToRgb(parsed.r, parsed.g, parsed.b)[2];
+  }
+
+  return parsed.b;
+}
+
+function alpha(c: ColorInput): number {
   if (typeof c === 'number') return 255;
-  return Math.round(c.a * 255);
+
+  return Math.round(resolveColorInput(c).a * 255);
 }
 
 function parseColor(r: any, g?: number, b?: number, a?: number, mode = 'RGB'): Color {
@@ -1059,13 +1148,52 @@ function setupInputListeners(canvas: HTMLCanvasElement) {
     mouseY = pos.y;
   };
 
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const zoomFactor = e.deltaY < 0 ? 1.15 : 0.85;
+    const sx = (window as any).getScreenMouseX ? (window as any).getScreenMouseX() : Math.floor(mouseX / ((window as any).scaler || 1));
+    const sy = (window as any).getScreenMouseY ? (window as any).getScreenMouseY() : Math.floor(mouseY / ((window as any).scaler || 1));
+    zoomMapAt(zoomFactor, sx, sy);
+  }, { passive: false });
+
   canvas.addEventListener('mousemove', (e) => {
     updateMouse(e.clientX, e.clientY);
+    const sx = (window as any).getScreenMouseX ? (window as any).getScreenMouseX() : Math.floor(mouseX / ((window as any).scaler || 1));
+    const sy = (window as any).getScreenMouseY ? (window as any).getScreenMouseY() : Math.floor(mouseY / ((window as any).scaler || 1));
+
+    if (mouseIsPressed && isPanningMap) {
+      const dx = sx - panStartX;
+      const dy = sy - panStartY;
+      if (Math.hypot(dx, dy) > 3) {
+        hasDraggedMap = true;
+      }
+      if (mapZoom > 1 || hasDraggedMap) {
+        mapPanX = initialPanX + dx;
+        mapPanY = initialPanY + dy;
+        constrainPan();
+      }
+    }
   });
 
   canvas.addEventListener('mousedown', (e) => {
     mouseIsPressed = true;
     updateMouse(e.clientX, e.clientY);
+    const sx = (window as any).getScreenMouseX ? (window as any).getScreenMouseX() : Math.floor(mouseX / ((window as any).scaler || 1));
+    const sy = (window as any).getScreenMouseY ? (window as any).getScreenMouseY() : Math.floor(mouseY / ((window as any).scaler || 1));
+
+    const targetUI = typeof (window as any).UI !== 'undefined' ? (window as any).UI.mouseOver : null;
+    const isPrimaryWrapper = targetUI && targetUI === (window as any).primaryWrapper;
+    if (!targetUI || isPrimaryWrapper) {
+      isPanningMap = true;
+      panStartX = sx;
+      panStartY = sy;
+      initialPanX = mapPanX;
+      initialPanY = mapPanY;
+      hasDraggedMap = false;
+    } else {
+      isPanningMap = false;
+    }
+
     if (typeof (window as any).mousePressed === 'function') {
       (window as any).mousePressed(e);
     }
@@ -1073,6 +1201,7 @@ function setupInputListeners(canvas: HTMLCanvasElement) {
 
   window.addEventListener('mouseup', (e) => {
     mouseIsPressed = false;
+    isPanningMap = false;
     if (typeof (window as any).mouseReleased === 'function') {
       (window as any).mouseReleased(e);
     }
@@ -1085,10 +1214,42 @@ function setupInputListeners(canvas: HTMLCanvasElement) {
   });
 
   // Touch support
+  let touchStartDist = 0;
+
   canvas.addEventListener('touchmove', (e) => {
-    if (e.touches.length > 0) {
+    if (e.touches.length === 2) {
+      e.preventDefault();
+      const currentDist = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+      if (touchStartDist > 0) {
+        const factor = currentDist / touchStartDist;
+        touchStartDist = currentDist;
+        const rect = canvas.getBoundingClientRect();
+        const midX = (((e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left) / rect.width) * (canvas.width / ((window as any).scaler || 1));
+        const midY = (((e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top) / rect.height) * (canvas.height / ((window as any).scaler || 1));
+        zoomMapAt(factor, midX, midY);
+      }
+    } else if (e.touches.length === 1) {
       const touch = e.touches[0];
       updateMouse(touch.clientX, touch.clientY);
+      const sx = (window as any).getScreenMouseX ? (window as any).getScreenMouseX() : Math.floor(mouseX / ((window as any).scaler || 1));
+      const sy = (window as any).getScreenMouseY ? (window as any).getScreenMouseY() : Math.floor(mouseY / ((window as any).scaler || 1));
+
+      if (isPanningMap) {
+        const dx = sx - panStartX;
+        const dy = sy - panStartY;
+        if (Math.hypot(dx, dy) > 3) {
+          hasDraggedMap = true;
+        }
+        if (mapZoom > 1 || hasDraggedMap) {
+          mapPanX = initialPanX + dx;
+          mapPanY = initialPanY + dy;
+          constrainPan();
+        }
+      }
+
       if (typeof (window as any).touchMoved === 'function') {
         const res = (window as any).touchMoved(e);
         if (res === false) e.preventDefault();
@@ -1097,10 +1258,32 @@ function setupInputListeners(canvas: HTMLCanvasElement) {
   }, { passive: false });
 
   canvas.addEventListener('touchstart', (e) => {
-    if (e.touches.length > 0) {
+    if (e.touches.length === 2) {
+      e.preventDefault();
+      touchStartDist = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+    } else if (e.touches.length === 1) {
       const touch = e.touches[0];
       mouseIsPressed = true;
       updateMouse(touch.clientX, touch.clientY);
+      const sx = (window as any).getScreenMouseX ? (window as any).getScreenMouseX() : Math.floor(mouseX / ((window as any).scaler || 1));
+      const sy = (window as any).getScreenMouseY ? (window as any).getScreenMouseY() : Math.floor(mouseY / ((window as any).scaler || 1));
+
+      const targetUI = typeof (window as any).UI !== 'undefined' ? (window as any).UI.mouseOver : null;
+      const isPrimaryWrapper = targetUI && targetUI === (window as any).primaryWrapper;
+      if (!targetUI || isPrimaryWrapper) {
+        isPanningMap = true;
+        panStartX = sx;
+        panStartY = sy;
+        initialPanX = mapPanX;
+        initialPanY = mapPanY;
+        hasDraggedMap = false;
+      } else {
+        isPanningMap = false;
+      }
+
       if (typeof (window as any).touchStarted === 'function') {
         const res = (window as any).touchStarted(e);
         if (res === false) e.preventDefault();
@@ -1109,7 +1292,13 @@ function setupInputListeners(canvas: HTMLCanvasElement) {
   }, { passive: false });
 
   canvas.addEventListener('touchend', (e) => {
-    mouseIsPressed = false;
+    if (e.touches.length < 2) {
+      touchStartDist = 0;
+    }
+    if (e.touches.length === 0) {
+      mouseIsPressed = false;
+      isPanningMap = false;
+    }
     if (typeof (window as any).touchEnded === 'function') {
       const res = (window as any).touchEnded(e);
       if (res === false) e.preventDefault();
@@ -3241,7 +3430,7 @@ class UI{
             let right = left + this.width;
             let top = this.getY();
             let bottom = top + this.height;
-            if(this.clickFunc && getMouseX()>=left && getMouseX()<right && getMouseY()>=top && getMouseY()<bottom) return this;
+            if(this.clickFunc && getScreenMouseX()>=left && getScreenMouseX()<right && getScreenMouseY()>=top && getScreenMouseY()<bottom) return this;
         }
         return null;
     }
@@ -3403,15 +3592,22 @@ UI.init = function(){
             let drawMagGlass = ()=>{
                 if(simSettings.showMagGlass){
                     let magMeta = buffers.get(magnifyingGlass);
+                    let mx = getMapMouseX();
+                    let my = getMapMouseY();
                     image(
                         magnifyingGlass,
-                        getMouseX()-magMeta.baseWidth/2,
-                        getMouseY()-magMeta.baseHeight/2,
-                        magMeta.baseWidth,
-                        magMeta.baseHeight
+                        mx - (magMeta.baseWidth / 2) / mapZoom,
+                        my - (magMeta.baseHeight / 2) / mapZoom,
+                        magMeta.baseWidth / mapZoom,
+                        magMeta.baseHeight / mapZoom
                     );
                 }
             };
+
+            push();
+            translate(mapPanX, mapPanY);
+            scale(mapZoom);
+
             drawBuffer(outBasinBuffer);
             if(basin.env.displaying>=0 && basin.env.layerIsOceanic){
                 drawBuffer(envLayer);
@@ -3436,11 +3632,17 @@ UI.init = function(){
             drawBuffer(tracks);
             drawBuffer(forecastTracks);
             drawBuffer(stormIcons);
+
+            pop();
         }
     },function(){
         helpBox.hide();
         sideMenu.hide();
         seedBox.hide();
+        if(hasDraggedMap){
+            hasDraggedMap = false;
+            return;
+        }
         if(UI.viewBasin instanceof Basin){
             let basin = UI.viewBasin;
             if(basin.godMode && keyIsPressed && basin.viewingPresent()) {
@@ -4427,6 +4629,34 @@ UI.init = function(){
         dateNavigator.toggleShow();
     });
 
+    let zoomControlBox = primaryWrapper.append(false, WIDTH - 135, topBar.height + 8, 125, 26, function(s){
+        fill(COLORS.UI.box);
+        noStroke();
+        s.fullRect();
+        fill(COLORS.UI.text);
+        textAlign(CENTER, CENTER);
+        textSize(12);
+        text(Math.round(mapZoom * 100) + '%', 62, 13);
+    }, false);
+
+    zoomControlBox.append(false, 3, 2, 22, 22, function(s){
+        s.button('-', true, 16);
+    }, function(){
+        zoomMapAt(0.8, WIDTH / 2, HEIGHT / 2);
+    });
+
+    zoomControlBox.append(false, 28, 2, 22, 22, function(s){
+        s.button('+', true, 16);
+    }, function(){
+        zoomMapAt(1.25, WIDTH / 2, HEIGHT / 2);
+    });
+
+    zoomControlBox.append(false, 98, 2, 22, 22, function(s){
+        s.button('🏠', true, 12);
+    }, function(){
+        resetMapZoom();
+    });
+
     let panel_timeline_container = primaryWrapper.append(false,0,topBar.height,0,0,undefined,undefined,false);
 
     dateNavigator = primaryWrapper.append(false,0,30,140,80,function(s){     // Analysis navigator panel
@@ -5062,19 +5292,29 @@ UI.init = function(){
                 }
                 let scale = UI.viewBasin.getScale(UI.viewBasin.mainSubBasin);
                 if(scale.measure === SCALE_MEASURE_ONE_MIN_KNOTS || scale.measure === SCALE_MEASURE_TEN_MIN_KNOTS){
-                    let color = scale.getColor(0);
+                    let bandColor = color(scale.getColor(0));
                     let y0 = bBound;
                     for(let i = 1; i < scale.classifications.length; i++){
                         let threshold = scale.classifications[i].threshold;
                         let y1 = map(threshold, 0, max_wind, bBound, tBound, true);
-                        fill(red(color), green(color), blue(color), 90);
+                        fill(
+                            red(bandColor),
+                            green(bandColor),
+                            blue(bandColor),
+                            90
+                        );
                         rect(lBound, y1, rBound - lBound, y0 - y1);
-                        color = scale.getColor(i);
+                        bandColor = color(scale.getColor(i));
                         y0 = y1;
                         if(threshold > max_wind)
                             break;
                         if(i === scale.classifications.length - 1 && threshold < max_wind){
-                            fill(red(color), green(color), blue(color), 90);
+                            fill(
+                                red(bandColor),
+                                green(bandColor),
+                                blue(bandColor),
+                                90
+                            );
                             rect(lBound, tBound, rBound - lBound, y0 - tBound);
                         }
                     }
@@ -5112,14 +5352,20 @@ UI.init = function(){
                     let y0 = map(w0, 0, max_wind, bBound, tBound);
                     let x1 = map(t1, begin_tick, end_tick, lBound, rBound);
                     let y1 = map(w1, 0, max_wind, bBound, tBound);
-                    if(tropOrSub(target.getStormDataByTick(t0).type))
-                        stroke(COLORS.UI.text);
-                    else
-                        stroke('#CCC');
+
+                    const tropical = tropOrSub(target.getStormDataByTick(t0).type);
+
+                    // Light outline keeps the track visible over dark category bands.
+                    stroke(255, 255, 255, 220);
                     strokeWeight(5);
+                    line(x0, y0, x1, y1);
                     point(x0, y0);
+
+                    // Dark core remains visible over light category bands.
+                    stroke(tropical ? '#111827' : '#6B7280');
                     strokeWeight(2);
                     line(x0, y0, x1, y1);
+                    point(x0, y0);
                 }
                 strokeWeight(1);
             }else{
@@ -5452,6 +5698,18 @@ function keyPressed(){
             case 'c':
                 simSettings.setColorScheme("incmod", COLOR_SCHEMES.length);
                 refreshTracks(true);
+                break;
+            case '=':
+            case '+':
+                zoomMapAt(1.25, WIDTH / 2, HEIGHT / 2);
+                break;
+            case '-':
+            case '_':
+                zoomMapAt(0.8, WIDTH / 2, HEIGHT / 2);
+                break;
+            case '0':
+            case 'r':
+                resetMapZoom();
                 break;
             default:
                 switch(keyCode){
@@ -6683,7 +6941,8 @@ ACTIVE_ATTRIBS.defaults = [
     'organization',
     'lowerWarmCore',
     'upperWarmCore',
-    'depth'
+    'depth',
+    'genesisProgress'
 ];
 
 ACTIVE_ATTRIBS[SIM_MODE_EXPERIMENTAL] = [
@@ -6691,6 +6950,7 @@ ACTIVE_ATTRIBS[SIM_MODE_EXPERIMENTAL] = [
     'lowerWarmCore',
     'upperWarmCore',
     'depth',
+    'genesisProgress',
     'kaboom'
 ];
 
@@ -6835,8 +7095,112 @@ SPAWN_RULES.defaults.archetypes = {
         inherit: 'tc',
         pressure: 690,
         windSpeed: 440
+    },
+    'monsoonLow': {
+        pressure: [1004, 1012],
+        windSpeed: [10, 25],
+        type: TROPWAVE,
+
+        organization: [0.1, 0.3],
+        lowerWarmCore: [0.7, 1],
+        upperWarmCore: [0.4, 0.8],
+        depth: [0, 0.2],
+
+        genesisProgress: 0
     }
 };
+
+function lowLevelDynamics(basin, x, y, t){
+    const d = 10;
+
+    const east = basin.env.get("LLSteering", x + d, y, t).copy();
+    const west = basin.env.get("LLSteering", x - d, y, t).copy();
+    const south = basin.env.get("LLSteering", x, y + d, t).copy();
+    const north = basin.env.get("LLSteering", x, y - d, t).copy();
+
+    const duDx = (east.x - west.x) / (2 * d);
+    const dvDx = (east.y - west.y) / (2 * d);
+
+    const duDy = (south.x - north.x) / (2 * d);
+    const dvDy = (south.y - north.y) / (2 * d);
+
+    return {
+        vorticity: dvDx - duDy,
+        convergence: -(duDx + dvDy)
+    };
+}
+
+function genesisPotential(basin, x, y){
+    const coord = Coordinate.convertFromXY(basin.mapType, x, y);
+
+    if(land && land.get(coord) > 0.5)
+        return 0;
+
+    const lat = abs(coord.latitude);
+    if(lat < 3 || lat > 30)
+        return 0;
+
+    const t = basin.tick;
+    const sst = basin.env.get("SST", x, y, t);
+    const moisture = basin.env.get("moisture", x, y, t);
+    const shearVec = basin.env.get("shear", x, y, t);
+    const shear = shearVec ? shearVec.mag() : 0;
+
+    const sstFactor = constrain(map(sst, 25, 29, 0, 1), 0, 1);
+    const moistureFactor = constrain(map(moisture, 0.45, 0.7, 0, 1), 0, 1);
+    const shearFactor = constrain(map(shear, 3.5, 1, 0, 1), 0, 1);
+
+    const lowLatitudeFactor = constrain(map(lat, 3, 8, 0, 1), 0, 1);
+    const highLatitudeFactor = constrain(map(lat, 30, 22, 0, 1), 0, 1);
+    const latitudeFactor = lowLatitudeFactor * highLatitudeFactor;
+
+    let dynamicsFactor = 1;
+    try {
+        const dynamics = lowLevelDynamics(basin, x, y, t);
+        const vorticityFactor = constrain(map(dynamics.vorticity, 0, 0.03, 0, 1), 0, 1);
+        const convergenceFactor = constrain(map(dynamics.convergence, 0, 0.03, 0, 1), 0, 1);
+        dynamicsFactor = 0.5 + 0.5 * (vorticityFactor * 0.5 + convergenceFactor * 0.5);
+    } catch(e) {
+        dynamicsFactor = 1;
+    }
+
+    return sstFactor * moistureFactor * shearFactor * latitudeFactor * dynamicsFactor;
+}
+
+function trySpawnSouthChinaSeaDisturbance(basin){
+    const longitude = random(105, 120);
+    const latitude = random(5, 20);
+
+    const pos = Coordinate.convertToXY(
+        basin.mapType,
+        longitude,
+        latitude
+    );
+
+    if(pos.x < 0 || pos.x >= WIDTH || pos.y < 0 || pos.y >= HEIGHT)
+        return;
+
+    const coord = new Coordinate(longitude, latitude);
+
+    if(land && land.get(coord) > 0.5)
+        return;
+
+    const potential = genesisPotential(
+        basin,
+        pos.x,
+        pos.y
+    );
+
+    const disturbanceChance = 0.0003 + 0.0015 * potential;
+
+    if(random() < disturbanceChance){
+        basin.spawnArchetype(
+            'monsoonLow',
+            pos.x,
+            pos.y
+        );
+    }
+}
 
 SPAWN_RULES.defaults.doSpawn = function(b){
     // tropical waves
@@ -6844,6 +7208,9 @@ SPAWN_RULES.defaults.doSpawn = function(b){
 
     // extratropical cyclones
     if(random()<0.01-0.002*seasonCurve(b.tick)) b.spawnArchetype('ex');
+
+    // South China Sea disturbance
+    trySpawnSouthChinaSeaDisturbance(b);
 };
 
 // -- Normal Mode -- //
@@ -7623,6 +7990,19 @@ STORM_ALGORITHM.defaults.core = function(sys,u){
     );
     sys.depth = lerp(sys.depth,targetDepth,0.05);
 
+    if(sys.genesisProgress === undefined)
+        sys.genesisProgress = 0;
+
+    const g = genesisPotential(sys.basin, sys.pos.x, sys.pos.y);
+
+    if(g > 0.55){
+        sys.genesisProgress += (g - 0.55) / 12;
+    }else{
+        sys.genesisProgress -= (0.55 - g) / 6;
+    }
+
+    sys.genesisProgress = constrain(sys.genesisProgress, 0, 1);
+
     if(sys.pressure > 1030 || sys.interaction.kill > 0)
         sys.kill = true;
 };
@@ -7672,6 +8052,19 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].core = function(sys,u){
     sys.depth = lerp(sys.depth,0,tropicalness*(1-sys.organization)*0.02);
     sys.depth = lerp(sys.depth,lnd ? 0.5 : map(SST,26,29,0.5,0.65,true),tropicalness*sys.organization*0.025);
 
+    if(sys.genesisProgress === undefined)
+        sys.genesisProgress = 0;
+
+    const gExp = genesisPotential(sys.basin, sys.pos.x, sys.pos.y);
+
+    if(gExp > 0.55){
+        sys.genesisProgress += (gExp - 0.55) / 12;
+    }else{
+        sys.genesisProgress -= (0.55 - gExp) / 6;
+    }
+
+    sys.genesisProgress = constrain(sys.genesisProgress, 0, 1);
+
     if(sys.kaboom > 0 && sys.kaboom < 1)
         sys.kaboom = random()<sys.kaboom ? 1 : 0;
 
@@ -7713,6 +8106,12 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].core = function(sys,u){
 // -- Type Determination -- //
 
 STORM_ALGORITHM.defaults.typeDetermination = function(sys,u){
+    if(sys.genesisProgress === undefined)
+        sys.genesisProgress = (sys.type === TROP || sys.type === SUBTROP) ? 1 : 0;
+
+    let canFormWave = sys.genesisProgress >= 1 && sys.organization >= 0.45 && sys.windSpeed >= 25 && sys.lowerWarmCore >= 0.55 && sys.upperWarmCore >= 0.56;
+    let canFormDefault = sys.genesisProgress >= 1 && sys.organization >= 0.45 && sys.windSpeed >= 25 && sys.lowerWarmCore >= 0.55 && sys.upperWarmCore >= 0.57;
+
     switch(sys.type){
         case TROP:
             sys.type = sys.lowerWarmCore<0.55 ? EXTROP : ((sys.organization<0.4 && sys.windSpeed<50) || sys.windSpeed<20) ? sys.upperWarmCore<0.56 ? EXTROP : TROPWAVE : sys.upperWarmCore<0.56 ? SUBTROP : TROP;
@@ -7721,10 +8120,10 @@ STORM_ALGORITHM.defaults.typeDetermination = function(sys,u){
             sys.type = sys.lowerWarmCore<0.55 ? EXTROP : ((sys.organization<0.4 && sys.windSpeed<50) || sys.windSpeed<20) ? sys.upperWarmCore<0.57 ? EXTROP : TROPWAVE : sys.upperWarmCore<0.57 ? SUBTROP : TROP;
             break;
         case TROPWAVE:
-            sys.type = sys.lowerWarmCore<0.55 ? EXTROP : (sys.organization<0.45 || sys.windSpeed<25) ? sys.upperWarmCore<0.56 ? EXTROP : TROPWAVE : sys.upperWarmCore<0.56 ? SUBTROP : TROP;
+            sys.type = sys.lowerWarmCore<0.55 ? EXTROP : (!canFormWave) ? sys.upperWarmCore<0.56 ? EXTROP : TROPWAVE : sys.upperWarmCore<0.56 ? SUBTROP : TROP;
             break;
         default:
-            sys.type = sys.lowerWarmCore<0.6 ? EXTROP : (sys.organization<0.45 || sys.windSpeed<25) ? sys.upperWarmCore<0.57 ? EXTROP : TROPWAVE : sys.upperWarmCore<0.57 ? SUBTROP : TROP;
+            sys.type = sys.lowerWarmCore<0.6 ? EXTROP : (!canFormDefault) ? sys.upperWarmCore<0.57 ? EXTROP : TROPWAVE : sys.upperWarmCore<0.57 ? SUBTROP : TROP;
     }
 };
 
@@ -7732,39 +8131,39 @@ STORM_ALGORITHM.defaults.typeDetermination = function(sys,u){
 // Version number of a simulation mode's storm algorithm
 // Used for upgrading the active attribute values if needed
 
-STORM_ALGORITHM[SIM_MODE_NORMAL].version = 0;
-STORM_ALGORITHM[SIM_MODE_HYPER].version = 0;
-STORM_ALGORITHM[SIM_MODE_WILD].version = 0;
-STORM_ALGORITHM[SIM_MODE_MEGABLOBS].version = 0;
-STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].version = 1;
-STORM_ALGORITHM[SIM_MODE_SPOOKY].version = 0;
+STORM_ALGORITHM[SIM_MODE_NORMAL].version = 1;
+STORM_ALGORITHM[SIM_MODE_HYPER].version = 1;
+STORM_ALGORITHM[SIM_MODE_WILD].version = 1;
+STORM_ALGORITHM[SIM_MODE_MEGABLOBS].version = 1;
+STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].version = 2;
+STORM_ALGORITHM[SIM_MODE_SPOOKY].version = 1;
 
 // -- Upgrade -- //
 // Converts active attributes in case an active system is loaded after an algorithm change breaks old values
 
-// STORM_ALGORITHM[SIM_MODE_NORMAL].upgrade = function(sys,data,oldVersion){
-
-// };
-
-// STORM_ALGORITHM[SIM_MODE_HYPER].upgrade = function(sys,data,oldVersion){
-
-// };
-
-// STORM_ALGORITHM[SIM_MODE_WILD].upgrade = function(sys,data,oldVersion){
-
-// };
-
-// STORM_ALGORITHM[SIM_MODE_MEGABLOBS].upgrade = function(sys,data,oldVersion){
-
-// };
+STORM_ALGORITHM[SIM_MODE_NORMAL].upgrade =
+STORM_ALGORITHM[SIM_MODE_HYPER].upgrade =
+STORM_ALGORITHM[SIM_MODE_WILD].upgrade =
+STORM_ALGORITHM[SIM_MODE_MEGABLOBS].upgrade =
+STORM_ALGORITHM[SIM_MODE_SPOOKY].upgrade = function(sys,data,oldVersion){
+    sys.organization = data.organization || 0;
+    sys.lowerWarmCore = data.lowerWarmCore || 0;
+    sys.upperWarmCore = data.upperWarmCore || 0;
+    sys.depth = data.depth || 0;
+    if(oldVersion < 1)
+        sys.genesisProgress = 0;
+};
 
 STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].upgrade = function(sys,data,oldVersion){
     if(oldVersion < 1){
-        sys.organization = data.organization;
-        sys.lowerWarmCore = data.lowerWarmCore;
-        sys.upperWarmCore = data.upperWarmCore;
-        sys.depth = data.depth;
+        sys.organization = data.organization || 0;
+        sys.lowerWarmCore = data.lowerWarmCore || 0;
+        sys.upperWarmCore = data.upperWarmCore || 0;
+        sys.depth = data.depth || 0;
         sys.kaboom = 0;
+    }
+    if(oldVersion < 2){
+        sys.genesisProgress = 0;
     }
 };
 
@@ -10834,12 +11233,28 @@ function drawBuffer(b){
     image(b,0,0,WIDTH,HEIGHT);
 }
 
-function getMouseX(){
+function getScreenMouseX(){
     return floor(mouseX/scaler);
 }
 
-function getMouseY(){
+function getScreenMouseY(){
     return floor(mouseY/scaler);
+}
+
+function getMapMouseX(){
+    return floor(((mouseX/scaler) - mapPanX) / mapZoom);
+}
+
+function getMapMouseY(){
+    return floor(((mouseY/scaler) - mapPanY) / mapZoom);
+}
+
+function getMouseX(){
+    return getMapMouseX();
+}
+
+function getMouseY(){
+    return getMapMouseY();
 }
 
 function coordinateInCanvas(x,y,isPixelCoordinate){

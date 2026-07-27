@@ -66,6 +66,67 @@ let key = '';
 let keyCode = 0;
 let deviceOrientation = 'landscape';
 
+let mapZoom = 1;
+let mapPanX = 0;
+let mapPanY = 0;
+let isPanningMap = false;
+let panStartX = 0;
+let panStartY = 0;
+let initialPanX = 0;
+let initialPanY = 0;
+let hasDraggedMap = false;
+
+function constrainPan() {
+  if (mapZoom <= 1) {
+    mapZoom = 1;
+    mapPanX = 0;
+    mapPanY = 0;
+    return;
+  }
+  const minPanX = 1440 * (1 - mapZoom);
+  const maxPanX = 0;
+  const minPanY = 720 * (1 - mapZoom);
+  const maxPanY = 0;
+
+  mapPanX = Math.min(Math.max(mapPanX, minPanX), maxPanX);
+  mapPanY = Math.min(Math.max(mapPanY, minPanY), maxPanY);
+}
+
+function zoomMapAt(factor: number, screenX?: number, screenY?: number) {
+  if (screenX === undefined) screenX = 1440 / 2;
+  if (screenY === undefined) screenY = 720 / 2;
+
+  const oldZoom = mapZoom;
+  let newZoom = mapZoom * factor;
+  newZoom = Math.min(Math.max(newZoom, 1), 10);
+  if (Math.abs(newZoom - 1) < 0.01) {
+    newZoom = 1;
+  }
+
+  if (newZoom === 1) {
+    mapZoom = 1;
+    mapPanX = 0;
+    mapPanY = 0;
+    return;
+  }
+
+  const mapX = (screenX - mapPanX) / oldZoom;
+  const mapY = (screenY - mapPanY) / oldZoom;
+
+  mapZoom = newZoom;
+  mapPanX = screenX - mapX * newZoom;
+  mapPanY = screenY - mapY * newZoom;
+
+  constrainPan();
+}
+
+function resetMapZoom() {
+  mapZoom = 1;
+  mapPanX = 0;
+  mapPanY = 0;
+  hasDraggedMap = false;
+}
+
 // Math wrappers
 const floor = Math.floor;
 const ceil = Math.ceil;
@@ -311,43 +372,71 @@ function rgbToHsb(r: number, g: number, b: number): [number, number, number] {
   ];
 }
 
-function brightness(c: Color | number): number {
-  if (typeof c === 'number') return c;
-  if (isHSBMode(c.mode)) return c.b;
-  const hsb = rgbToHsb(c.r, c.g, c.b);
-  return hsb[2];
-}
+type ColorInput = Color | string | number;
 
-function red(c: Color | number): number {
-  if (typeof c === 'number') return c;
-  if (isHSBMode(c.mode)) {
-    const rgb = hsbToRgb(c.r, c.g, c.b);
-    return rgb[0];
+function resolveColorInput(value: ColorInput): Color {
+  if (value instanceof Color) {
+    return value;
   }
-  return c.r;
-}
-
-function green(c: Color | number): number {
-  if (typeof c === 'number') return c;
-  if (isHSBMode(c.mode)) {
-    const rgb = hsbToRgb(c.r, c.g, c.b);
-    return rgb[1];
+  if (typeof value === 'string') {
+    const [cr, cg, cb, ca] = parseCSSColor(value);
+    return new Color(cr, cg, cb, ca, 'RGB');
   }
-  return c.g;
+  return new Color(value, value, value, 1, 'RGB');
 }
 
-function blue(c: Color | number): number {
+function brightness(c: ColorInput): number {
   if (typeof c === 'number') return c;
-  if (isHSBMode(c.mode)) {
-    const rgb = hsbToRgb(c.r, c.g, c.b);
-    return rgb[2];
+
+  const parsed = resolveColorInput(c);
+
+  if (isHSBMode(parsed.mode)) {
+    return parsed.b;
   }
-  return c.b;
+
+  return rgbToHsb(parsed.r, parsed.g, parsed.b)[2];
 }
 
-function alpha(c: Color | number): number {
+function red(c: ColorInput): number {
+  if (typeof c === 'number') return c;
+
+  const parsed = resolveColorInput(c);
+
+  if (isHSBMode(parsed.mode)) {
+    return hsbToRgb(parsed.r, parsed.g, parsed.b)[0];
+  }
+
+  return parsed.r;
+}
+
+function green(c: ColorInput): number {
+  if (typeof c === 'number') return c;
+
+  const parsed = resolveColorInput(c);
+
+  if (isHSBMode(parsed.mode)) {
+    return hsbToRgb(parsed.r, parsed.g, parsed.b)[1];
+  }
+
+  return parsed.g;
+}
+
+function blue(c: ColorInput): number {
+  if (typeof c === 'number') return c;
+
+  const parsed = resolveColorInput(c);
+
+  if (isHSBMode(parsed.mode)) {
+    return hsbToRgb(parsed.r, parsed.g, parsed.b)[2];
+  }
+
+  return parsed.b;
+}
+
+function alpha(c: ColorInput): number {
   if (typeof c === 'number') return 255;
-  return Math.round(c.a * 255);
+
+  return Math.round(resolveColorInput(c).a * 255);
 }
 
 function parseColor(r: any, g?: number, b?: number, a?: number, mode = 'RGB'): Color {
@@ -1052,13 +1141,52 @@ function setupInputListeners(canvas: HTMLCanvasElement) {
     mouseY = pos.y;
   };
 
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const zoomFactor = e.deltaY < 0 ? 1.15 : 0.85;
+    const sx = (window as any).getScreenMouseX ? (window as any).getScreenMouseX() : Math.floor(mouseX / ((window as any).scaler || 1));
+    const sy = (window as any).getScreenMouseY ? (window as any).getScreenMouseY() : Math.floor(mouseY / ((window as any).scaler || 1));
+    zoomMapAt(zoomFactor, sx, sy);
+  }, { passive: false });
+
   canvas.addEventListener('mousemove', (e) => {
     updateMouse(e.clientX, e.clientY);
+    const sx = (window as any).getScreenMouseX ? (window as any).getScreenMouseX() : Math.floor(mouseX / ((window as any).scaler || 1));
+    const sy = (window as any).getScreenMouseY ? (window as any).getScreenMouseY() : Math.floor(mouseY / ((window as any).scaler || 1));
+
+    if (mouseIsPressed && isPanningMap) {
+      const dx = sx - panStartX;
+      const dy = sy - panStartY;
+      if (Math.hypot(dx, dy) > 3) {
+        hasDraggedMap = true;
+      }
+      if (mapZoom > 1 || hasDraggedMap) {
+        mapPanX = initialPanX + dx;
+        mapPanY = initialPanY + dy;
+        constrainPan();
+      }
+    }
   });
 
   canvas.addEventListener('mousedown', (e) => {
     mouseIsPressed = true;
     updateMouse(e.clientX, e.clientY);
+    const sx = (window as any).getScreenMouseX ? (window as any).getScreenMouseX() : Math.floor(mouseX / ((window as any).scaler || 1));
+    const sy = (window as any).getScreenMouseY ? (window as any).getScreenMouseY() : Math.floor(mouseY / ((window as any).scaler || 1));
+
+    const targetUI = typeof (window as any).UI !== 'undefined' ? (window as any).UI.mouseOver : null;
+    const isPrimaryWrapper = targetUI && targetUI === (window as any).primaryWrapper;
+    if (!targetUI || isPrimaryWrapper) {
+      isPanningMap = true;
+      panStartX = sx;
+      panStartY = sy;
+      initialPanX = mapPanX;
+      initialPanY = mapPanY;
+      hasDraggedMap = false;
+    } else {
+      isPanningMap = false;
+    }
+
     if (typeof (window as any).mousePressed === 'function') {
       (window as any).mousePressed(e);
     }
@@ -1066,6 +1194,7 @@ function setupInputListeners(canvas: HTMLCanvasElement) {
 
   window.addEventListener('mouseup', (e) => {
     mouseIsPressed = false;
+    isPanningMap = false;
     if (typeof (window as any).mouseReleased === 'function') {
       (window as any).mouseReleased(e);
     }
@@ -1078,10 +1207,42 @@ function setupInputListeners(canvas: HTMLCanvasElement) {
   });
 
   // Touch support
+  let touchStartDist = 0;
+
   canvas.addEventListener('touchmove', (e) => {
-    if (e.touches.length > 0) {
+    if (e.touches.length === 2) {
+      e.preventDefault();
+      const currentDist = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+      if (touchStartDist > 0) {
+        const factor = currentDist / touchStartDist;
+        touchStartDist = currentDist;
+        const rect = canvas.getBoundingClientRect();
+        const midX = (((e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left) / rect.width) * (canvas.width / ((window as any).scaler || 1));
+        const midY = (((e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top) / rect.height) * (canvas.height / ((window as any).scaler || 1));
+        zoomMapAt(factor, midX, midY);
+      }
+    } else if (e.touches.length === 1) {
       const touch = e.touches[0];
       updateMouse(touch.clientX, touch.clientY);
+      const sx = (window as any).getScreenMouseX ? (window as any).getScreenMouseX() : Math.floor(mouseX / ((window as any).scaler || 1));
+      const sy = (window as any).getScreenMouseY ? (window as any).getScreenMouseY() : Math.floor(mouseY / ((window as any).scaler || 1));
+
+      if (isPanningMap) {
+        const dx = sx - panStartX;
+        const dy = sy - panStartY;
+        if (Math.hypot(dx, dy) > 3) {
+          hasDraggedMap = true;
+        }
+        if (mapZoom > 1 || hasDraggedMap) {
+          mapPanX = initialPanX + dx;
+          mapPanY = initialPanY + dy;
+          constrainPan();
+        }
+      }
+
       if (typeof (window as any).touchMoved === 'function') {
         const res = (window as any).touchMoved(e);
         if (res === false) e.preventDefault();
@@ -1090,10 +1251,32 @@ function setupInputListeners(canvas: HTMLCanvasElement) {
   }, { passive: false });
 
   canvas.addEventListener('touchstart', (e) => {
-    if (e.touches.length > 0) {
+    if (e.touches.length === 2) {
+      e.preventDefault();
+      touchStartDist = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+    } else if (e.touches.length === 1) {
       const touch = e.touches[0];
       mouseIsPressed = true;
       updateMouse(touch.clientX, touch.clientY);
+      const sx = (window as any).getScreenMouseX ? (window as any).getScreenMouseX() : Math.floor(mouseX / ((window as any).scaler || 1));
+      const sy = (window as any).getScreenMouseY ? (window as any).getScreenMouseY() : Math.floor(mouseY / ((window as any).scaler || 1));
+
+      const targetUI = typeof (window as any).UI !== 'undefined' ? (window as any).UI.mouseOver : null;
+      const isPrimaryWrapper = targetUI && targetUI === (window as any).primaryWrapper;
+      if (!targetUI || isPrimaryWrapper) {
+        isPanningMap = true;
+        panStartX = sx;
+        panStartY = sy;
+        initialPanX = mapPanX;
+        initialPanY = mapPanY;
+        hasDraggedMap = false;
+      } else {
+        isPanningMap = false;
+      }
+
       if (typeof (window as any).touchStarted === 'function') {
         const res = (window as any).touchStarted(e);
         if (res === false) e.preventDefault();
@@ -1102,7 +1285,13 @@ function setupInputListeners(canvas: HTMLCanvasElement) {
   }, { passive: false });
 
   canvas.addEventListener('touchend', (e) => {
-    mouseIsPressed = false;
+    if (e.touches.length < 2) {
+      touchStartDist = 0;
+    }
+    if (e.touches.length === 0) {
+      mouseIsPressed = false;
+      isPanningMap = false;
+    }
     if (typeof (window as any).touchEnded === 'function') {
       const res = (window as any).touchEnded(e);
       if (res === false) e.preventDefault();

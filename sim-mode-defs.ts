@@ -19,7 +19,8 @@ ACTIVE_ATTRIBS.defaults = [
     'organization',
     'lowerWarmCore',
     'upperWarmCore',
-    'depth'
+    'depth',
+    'genesisProgress'
 ];
 
 ACTIVE_ATTRIBS[SIM_MODE_EXPERIMENTAL] = [
@@ -27,6 +28,7 @@ ACTIVE_ATTRIBS[SIM_MODE_EXPERIMENTAL] = [
     'lowerWarmCore',
     'upperWarmCore',
     'depth',
+    'genesisProgress',
     'kaboom'
 ];
 
@@ -171,8 +173,112 @@ SPAWN_RULES.defaults.archetypes = {
         inherit: 'tc',
         pressure: 690,
         windSpeed: 440
+    },
+    'monsoonLow': {
+        pressure: [1004, 1012],
+        windSpeed: [10, 25],
+        type: TROPWAVE,
+
+        organization: [0.1, 0.3],
+        lowerWarmCore: [0.7, 1],
+        upperWarmCore: [0.4, 0.8],
+        depth: [0, 0.2],
+
+        genesisProgress: 0
     }
 };
+
+function lowLevelDynamics(basin, x, y, t){
+    const d = 10;
+
+    const east = basin.env.get("LLSteering", x + d, y, t).copy();
+    const west = basin.env.get("LLSteering", x - d, y, t).copy();
+    const south = basin.env.get("LLSteering", x, y + d, t).copy();
+    const north = basin.env.get("LLSteering", x, y - d, t).copy();
+
+    const duDx = (east.x - west.x) / (2 * d);
+    const dvDx = (east.y - west.y) / (2 * d);
+
+    const duDy = (south.x - north.x) / (2 * d);
+    const dvDy = (south.y - north.y) / (2 * d);
+
+    return {
+        vorticity: dvDx - duDy,
+        convergence: -(duDx + dvDy)
+    };
+}
+
+function genesisPotential(basin, x, y){
+    const coord = Coordinate.convertFromXY(basin.mapType, x, y);
+
+    if(land && land.get(coord) > 0.5)
+        return 0;
+
+    const lat = abs(coord.latitude);
+    if(lat < 3 || lat > 30)
+        return 0;
+
+    const t = basin.tick;
+    const sst = basin.env.get("SST", x, y, t);
+    const moisture = basin.env.get("moisture", x, y, t);
+    const shearVec = basin.env.get("shear", x, y, t);
+    const shear = shearVec ? shearVec.mag() : 0;
+
+    const sstFactor = constrain(map(sst, 25, 29, 0, 1), 0, 1);
+    const moistureFactor = constrain(map(moisture, 0.45, 0.7, 0, 1), 0, 1);
+    const shearFactor = constrain(map(shear, 3.5, 1, 0, 1), 0, 1);
+
+    const lowLatitudeFactor = constrain(map(lat, 3, 8, 0, 1), 0, 1);
+    const highLatitudeFactor = constrain(map(lat, 30, 22, 0, 1), 0, 1);
+    const latitudeFactor = lowLatitudeFactor * highLatitudeFactor;
+
+    let dynamicsFactor = 1;
+    try {
+        const dynamics = lowLevelDynamics(basin, x, y, t);
+        const vorticityFactor = constrain(map(dynamics.vorticity, 0, 0.03, 0, 1), 0, 1);
+        const convergenceFactor = constrain(map(dynamics.convergence, 0, 0.03, 0, 1), 0, 1);
+        dynamicsFactor = 0.5 + 0.5 * (vorticityFactor * 0.5 + convergenceFactor * 0.5);
+    } catch(e) {
+        dynamicsFactor = 1;
+    }
+
+    return sstFactor * moistureFactor * shearFactor * latitudeFactor * dynamicsFactor;
+}
+
+function trySpawnSouthChinaSeaDisturbance(basin){
+    const longitude = random(105, 120);
+    const latitude = random(5, 20);
+
+    const pos = Coordinate.convertToXY(
+        basin.mapType,
+        longitude,
+        latitude
+    );
+
+    if(pos.x < 0 || pos.x >= WIDTH || pos.y < 0 || pos.y >= HEIGHT)
+        return;
+
+    const coord = new Coordinate(longitude, latitude);
+
+    if(land && land.get(coord) > 0.5)
+        return;
+
+    const potential = genesisPotential(
+        basin,
+        pos.x,
+        pos.y
+    );
+
+    const disturbanceChance = 0.0003 + 0.0015 * potential;
+
+    if(random() < disturbanceChance){
+        basin.spawnArchetype(
+            'monsoonLow',
+            pos.x,
+            pos.y
+        );
+    }
+}
 
 SPAWN_RULES.defaults.doSpawn = function(b){
     // tropical waves
@@ -180,6 +286,9 @@ SPAWN_RULES.defaults.doSpawn = function(b){
 
     // extratropical cyclones
     if(random()<0.01-0.002*seasonCurve(b.tick)) b.spawnArchetype('ex');
+
+    // South China Sea disturbance
+    trySpawnSouthChinaSeaDisturbance(b);
 };
 
 // -- Normal Mode -- //
@@ -959,6 +1068,19 @@ STORM_ALGORITHM.defaults.core = function(sys,u){
     );
     sys.depth = lerp(sys.depth,targetDepth,0.05);
 
+    if(sys.genesisProgress === undefined)
+        sys.genesisProgress = 0;
+
+    const g = genesisPotential(sys.basin, sys.pos.x, sys.pos.y);
+
+    if(g > 0.55){
+        sys.genesisProgress += (g - 0.55) / 12;
+    }else{
+        sys.genesisProgress -= (0.55 - g) / 6;
+    }
+
+    sys.genesisProgress = constrain(sys.genesisProgress, 0, 1);
+
     if(sys.pressure > 1030 || sys.interaction.kill > 0)
         sys.kill = true;
 };
@@ -1008,6 +1130,19 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].core = function(sys,u){
     sys.depth = lerp(sys.depth,0,tropicalness*(1-sys.organization)*0.02);
     sys.depth = lerp(sys.depth,lnd ? 0.5 : map(SST,26,29,0.5,0.65,true),tropicalness*sys.organization*0.025);
 
+    if(sys.genesisProgress === undefined)
+        sys.genesisProgress = 0;
+
+    const gExp = genesisPotential(sys.basin, sys.pos.x, sys.pos.y);
+
+    if(gExp > 0.55){
+        sys.genesisProgress += (gExp - 0.55) / 12;
+    }else{
+        sys.genesisProgress -= (0.55 - gExp) / 6;
+    }
+
+    sys.genesisProgress = constrain(sys.genesisProgress, 0, 1);
+
     if(sys.kaboom > 0 && sys.kaboom < 1)
         sys.kaboom = random()<sys.kaboom ? 1 : 0;
 
@@ -1049,6 +1184,12 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].core = function(sys,u){
 // -- Type Determination -- //
 
 STORM_ALGORITHM.defaults.typeDetermination = function(sys,u){
+    if(sys.genesisProgress === undefined)
+        sys.genesisProgress = (sys.type === TROP || sys.type === SUBTROP) ? 1 : 0;
+
+    let canFormWave = sys.genesisProgress >= 1 && sys.organization >= 0.45 && sys.windSpeed >= 25 && sys.lowerWarmCore >= 0.55 && sys.upperWarmCore >= 0.56;
+    let canFormDefault = sys.genesisProgress >= 1 && sys.organization >= 0.45 && sys.windSpeed >= 25 && sys.lowerWarmCore >= 0.55 && sys.upperWarmCore >= 0.57;
+
     switch(sys.type){
         case TROP:
             sys.type = sys.lowerWarmCore<0.55 ? EXTROP : ((sys.organization<0.4 && sys.windSpeed<50) || sys.windSpeed<20) ? sys.upperWarmCore<0.56 ? EXTROP : TROPWAVE : sys.upperWarmCore<0.56 ? SUBTROP : TROP;
@@ -1057,10 +1198,10 @@ STORM_ALGORITHM.defaults.typeDetermination = function(sys,u){
             sys.type = sys.lowerWarmCore<0.55 ? EXTROP : ((sys.organization<0.4 && sys.windSpeed<50) || sys.windSpeed<20) ? sys.upperWarmCore<0.57 ? EXTROP : TROPWAVE : sys.upperWarmCore<0.57 ? SUBTROP : TROP;
             break;
         case TROPWAVE:
-            sys.type = sys.lowerWarmCore<0.55 ? EXTROP : (sys.organization<0.45 || sys.windSpeed<25) ? sys.upperWarmCore<0.56 ? EXTROP : TROPWAVE : sys.upperWarmCore<0.56 ? SUBTROP : TROP;
+            sys.type = sys.lowerWarmCore<0.55 ? EXTROP : (!canFormWave) ? sys.upperWarmCore<0.56 ? EXTROP : TROPWAVE : sys.upperWarmCore<0.56 ? SUBTROP : TROP;
             break;
         default:
-            sys.type = sys.lowerWarmCore<0.6 ? EXTROP : (sys.organization<0.45 || sys.windSpeed<25) ? sys.upperWarmCore<0.57 ? EXTROP : TROPWAVE : sys.upperWarmCore<0.57 ? SUBTROP : TROP;
+            sys.type = sys.lowerWarmCore<0.6 ? EXTROP : (!canFormDefault) ? sys.upperWarmCore<0.57 ? EXTROP : TROPWAVE : sys.upperWarmCore<0.57 ? SUBTROP : TROP;
     }
 };
 
@@ -1068,39 +1209,39 @@ STORM_ALGORITHM.defaults.typeDetermination = function(sys,u){
 // Version number of a simulation mode's storm algorithm
 // Used for upgrading the active attribute values if needed
 
-STORM_ALGORITHM[SIM_MODE_NORMAL].version = 0;
-STORM_ALGORITHM[SIM_MODE_HYPER].version = 0;
-STORM_ALGORITHM[SIM_MODE_WILD].version = 0;
-STORM_ALGORITHM[SIM_MODE_MEGABLOBS].version = 0;
-STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].version = 1;
-STORM_ALGORITHM[SIM_MODE_SPOOKY].version = 0;
+STORM_ALGORITHM[SIM_MODE_NORMAL].version = 1;
+STORM_ALGORITHM[SIM_MODE_HYPER].version = 1;
+STORM_ALGORITHM[SIM_MODE_WILD].version = 1;
+STORM_ALGORITHM[SIM_MODE_MEGABLOBS].version = 1;
+STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].version = 2;
+STORM_ALGORITHM[SIM_MODE_SPOOKY].version = 1;
 
 // -- Upgrade -- //
 // Converts active attributes in case an active system is loaded after an algorithm change breaks old values
 
-// STORM_ALGORITHM[SIM_MODE_NORMAL].upgrade = function(sys,data,oldVersion){
-
-// };
-
-// STORM_ALGORITHM[SIM_MODE_HYPER].upgrade = function(sys,data,oldVersion){
-
-// };
-
-// STORM_ALGORITHM[SIM_MODE_WILD].upgrade = function(sys,data,oldVersion){
-
-// };
-
-// STORM_ALGORITHM[SIM_MODE_MEGABLOBS].upgrade = function(sys,data,oldVersion){
-
-// };
+STORM_ALGORITHM[SIM_MODE_NORMAL].upgrade =
+STORM_ALGORITHM[SIM_MODE_HYPER].upgrade =
+STORM_ALGORITHM[SIM_MODE_WILD].upgrade =
+STORM_ALGORITHM[SIM_MODE_MEGABLOBS].upgrade =
+STORM_ALGORITHM[SIM_MODE_SPOOKY].upgrade = function(sys,data,oldVersion){
+    sys.organization = data.organization || 0;
+    sys.lowerWarmCore = data.lowerWarmCore || 0;
+    sys.upperWarmCore = data.upperWarmCore || 0;
+    sys.depth = data.depth || 0;
+    if(oldVersion < 1)
+        sys.genesisProgress = 0;
+};
 
 STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].upgrade = function(sys,data,oldVersion){
     if(oldVersion < 1){
-        sys.organization = data.organization;
-        sys.lowerWarmCore = data.lowerWarmCore;
-        sys.upperWarmCore = data.upperWarmCore;
-        sys.depth = data.depth;
+        sys.organization = data.organization || 0;
+        sys.lowerWarmCore = data.lowerWarmCore || 0;
+        sys.upperWarmCore = data.upperWarmCore || 0;
+        sys.depth = data.depth || 0;
         sys.kaboom = 0;
+    }
+    if(oldVersion < 2){
+        sys.genesisProgress = 0;
     }
 };
 

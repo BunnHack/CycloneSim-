@@ -167,7 +167,7 @@ class UI{
             let right = left + this.width;
             let top = this.getY();
             let bottom = top + this.height;
-            if(this.clickFunc && getMouseX()>=left && getMouseX()<right && getMouseY()>=top && getMouseY()<bottom) return this;
+            if(this.clickFunc && getScreenMouseX()>=left && getScreenMouseX()<right && getScreenMouseY()>=top && getScreenMouseY()<bottom) return this;
         }
         return null;
     }
@@ -329,15 +329,22 @@ UI.init = function(){
             let drawMagGlass = ()=>{
                 if(simSettings.showMagGlass){
                     let magMeta = buffers.get(magnifyingGlass);
+                    let mx = getMapMouseX();
+                    let my = getMapMouseY();
                     image(
                         magnifyingGlass,
-                        getMouseX()-magMeta.baseWidth/2,
-                        getMouseY()-magMeta.baseHeight/2,
-                        magMeta.baseWidth,
-                        magMeta.baseHeight
+                        mx - (magMeta.baseWidth / 2) / mapZoom,
+                        my - (magMeta.baseHeight / 2) / mapZoom,
+                        magMeta.baseWidth / mapZoom,
+                        magMeta.baseHeight / mapZoom
                     );
                 }
             };
+
+            push();
+            translate(mapPanX, mapPanY);
+            scale(mapZoom);
+
             drawBuffer(outBasinBuffer);
             if(basin.env.displaying>=0 && basin.env.layerIsOceanic){
                 drawBuffer(envLayer);
@@ -362,11 +369,17 @@ UI.init = function(){
             drawBuffer(tracks);
             drawBuffer(forecastTracks);
             drawBuffer(stormIcons);
+
+            pop();
         }
     },function(){
         helpBox.hide();
         sideMenu.hide();
         seedBox.hide();
+        if(hasDraggedMap){
+            hasDraggedMap = false;
+            return;
+        }
         if(UI.viewBasin instanceof Basin){
             let basin = UI.viewBasin;
             if(basin.godMode && keyIsPressed && basin.viewingPresent()) {
@@ -1353,6 +1366,34 @@ UI.init = function(){
         dateNavigator.toggleShow();
     });
 
+    let zoomControlBox = primaryWrapper.append(false, WIDTH - 135, topBar.height + 8, 125, 26, function(s){
+        fill(COLORS.UI.box);
+        noStroke();
+        s.fullRect();
+        fill(COLORS.UI.text);
+        textAlign(CENTER, CENTER);
+        textSize(12);
+        text(Math.round(mapZoom * 100) + '%', 62, 13);
+    }, false);
+
+    zoomControlBox.append(false, 3, 2, 22, 22, function(s){
+        s.button('-', true, 16);
+    }, function(){
+        zoomMapAt(0.8, WIDTH / 2, HEIGHT / 2);
+    });
+
+    zoomControlBox.append(false, 28, 2, 22, 22, function(s){
+        s.button('+', true, 16);
+    }, function(){
+        zoomMapAt(1.25, WIDTH / 2, HEIGHT / 2);
+    });
+
+    zoomControlBox.append(false, 98, 2, 22, 22, function(s){
+        s.button('🏠', true, 12);
+    }, function(){
+        resetMapZoom();
+    });
+
     let panel_timeline_container = primaryWrapper.append(false,0,topBar.height,0,0,undefined,undefined,false);
 
     dateNavigator = primaryWrapper.append(false,0,30,140,80,function(s){     // Analysis navigator panel
@@ -1988,19 +2029,29 @@ UI.init = function(){
                 }
                 let scale = UI.viewBasin.getScale(UI.viewBasin.mainSubBasin);
                 if(scale.measure === SCALE_MEASURE_ONE_MIN_KNOTS || scale.measure === SCALE_MEASURE_TEN_MIN_KNOTS){
-                    let color = scale.getColor(0);
+                    let bandColor = color(scale.getColor(0));
                     let y0 = bBound;
                     for(let i = 1; i < scale.classifications.length; i++){
                         let threshold = scale.classifications[i].threshold;
                         let y1 = map(threshold, 0, max_wind, bBound, tBound, true);
-                        fill(red(color), green(color), blue(color), 90);
+                        fill(
+                            red(bandColor),
+                            green(bandColor),
+                            blue(bandColor),
+                            90
+                        );
                         rect(lBound, y1, rBound - lBound, y0 - y1);
-                        color = scale.getColor(i);
+                        bandColor = color(scale.getColor(i));
                         y0 = y1;
                         if(threshold > max_wind)
                             break;
                         if(i === scale.classifications.length - 1 && threshold < max_wind){
-                            fill(red(color), green(color), blue(color), 90);
+                            fill(
+                                red(bandColor),
+                                green(bandColor),
+                                blue(bandColor),
+                                90
+                            );
                             rect(lBound, tBound, rBound - lBound, y0 - tBound);
                         }
                     }
@@ -2038,14 +2089,20 @@ UI.init = function(){
                     let y0 = map(w0, 0, max_wind, bBound, tBound);
                     let x1 = map(t1, begin_tick, end_tick, lBound, rBound);
                     let y1 = map(w1, 0, max_wind, bBound, tBound);
-                    if(tropOrSub(target.getStormDataByTick(t0).type))
-                        stroke(COLORS.UI.text);
-                    else
-                        stroke('#CCC');
+
+                    const tropical = tropOrSub(target.getStormDataByTick(t0).type);
+
+                    // Light outline keeps the track visible over dark category bands.
+                    stroke(255, 255, 255, 220);
                     strokeWeight(5);
+                    line(x0, y0, x1, y1);
                     point(x0, y0);
+
+                    // Dark core remains visible over light category bands.
+                    stroke(tropical ? '#111827' : '#6B7280');
                     strokeWeight(2);
                     line(x0, y0, x1, y1);
+                    point(x0, y0);
                 }
                 strokeWeight(1);
             }else{
@@ -2378,6 +2435,18 @@ function keyPressed(){
             case 'c':
                 simSettings.setColorScheme("incmod", COLOR_SCHEMES.length);
                 refreshTracks(true);
+                break;
+            case '=':
+            case '+':
+                zoomMapAt(1.25, WIDTH / 2, HEIGHT / 2);
+                break;
+            case '-':
+            case '_':
+                zoomMapAt(0.8, WIDTH / 2, HEIGHT / 2);
+                break;
+            case '0':
+            case 'r':
+                resetMapZoom();
                 break;
             default:
                 switch(keyCode){
