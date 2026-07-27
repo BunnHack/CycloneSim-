@@ -7102,8 +7102,8 @@ SPAWN_RULES.defaults.archetypes = {
         type: TROPWAVE,
 
         organization: [0.1, 0.3],
-        lowerWarmCore: [0.7, 1],
-        upperWarmCore: [0.4, 0.8],
+        lowerWarmCore: [0.6, 0.9],
+        upperWarmCore: [0.55, 0.8],
         depth: [0, 0.2],
 
         genesisProgress: 0
@@ -7121,12 +7121,17 @@ function lowLevelDynamics(basin, x, y, t){
     const duDx = (east.x - west.x) / (2 * d);
     const dvDx = (east.y - west.y) / (2 * d);
 
-    const duDy = (south.x - north.x) / (2 * d);
-    const dvDy = (south.y - north.y) / (2 * d);
+    const duDy_screen = (south.x - north.x) / (2 * d);
+    const dvDy_screen = (south.y - north.y) / (2 * d);
+
+    const vorticity_math = dvDx + duDy_screen;
+    const convergence = -(duDx - dvDy_screen);
+
+    const cyclonicVorticity = basin.SHem ? -vorticity_math : vorticity_math;
 
     return {
-        vorticity: dvDx - duDy,
-        convergence: -(duDx + dvDy)
+        vorticity: cyclonicVorticity,
+        convergence: convergence
     };
 }
 
@@ -7147,27 +7152,46 @@ function genesisPotential(basin, x, y){
     const shear = shearVec ? shearVec.mag() : 0;
 
     const sstFactor = constrain(map(sst, 25, 29, 0, 1), 0, 1);
+    if(sstFactor === 0) return 0;
+
     const moistureFactor = constrain(map(moisture, 0.45, 0.7, 0, 1), 0, 1);
     const shearFactor = constrain(map(shear, 3.5, 1, 0, 1), 0, 1);
 
     const lowLatitudeFactor = constrain(map(lat, 3, 8, 0, 1), 0, 1);
     const highLatitudeFactor = constrain(map(lat, 30, 22, 0, 1), 0, 1);
     const latitudeFactor = lowLatitudeFactor * highLatitudeFactor;
+    if(latitudeFactor === 0) return 0;
 
-    let dynamicsFactor = 1;
+    let dynamicsFactor = 0.5;
     try {
         const dynamics = lowLevelDynamics(basin, x, y, t);
         const vorticityFactor = constrain(map(dynamics.vorticity, 0, 0.03, 0, 1), 0, 1);
         const convergenceFactor = constrain(map(dynamics.convergence, 0, 0.03, 0, 1), 0, 1);
         dynamicsFactor = 0.5 + 0.5 * (vorticityFactor * 0.5 + convergenceFactor * 0.5);
     } catch(e) {
-        dynamicsFactor = 1;
+        dynamicsFactor = 0.5;
     }
 
-    return sstFactor * moistureFactor * shearFactor * latitudeFactor * dynamicsFactor;
+    const factors = [
+        sstFactor,
+        moistureFactor,
+        shearFactor,
+        latitudeFactor,
+        dynamicsFactor
+    ];
+
+    const prod = factors.reduce((a, v) => a * v, 1);
+    return Math.pow(prod, 1 / factors.length);
 }
 
 function trySpawnSouthChinaSeaDisturbance(basin){
+    if(basin.mapType !== 8 || basin.SHem)
+        return;
+
+    const seasonFactor = constrain((seasonCurve(basin.tick) + 1) / 2, 0, 1);
+    if(seasonFactor < 0.15)
+        return;
+
     const longitude = random(105, 120);
     const latitude = random(5, 20);
 
@@ -7185,13 +7209,20 @@ function trySpawnSouthChinaSeaDisturbance(basin){
     if(land && land.get(coord) > 0.5)
         return;
 
+    if(basin.activeSystems){
+        for(let sys of basin.activeSystems){
+            if(sys.pos && dist(sys.pos.x, sys.pos.y, pos.x, pos.y) < 60)
+                return;
+        }
+    }
+
     const potential = genesisPotential(
         basin,
         pos.x,
         pos.y
     );
 
-    const disturbanceChance = 0.0003 + 0.0015 * potential;
+    const disturbanceChance = (0.0001 + 0.001 * potential) * sq(seasonFactor);
 
     if(random() < disturbanceChance){
         basin.spawnArchetype(
@@ -7223,6 +7254,8 @@ SPAWN_RULES[SIM_MODE_HYPER].doSpawn = function(b){
     if(random()<(0.013*sq((seasonCurve(b.tick)+1)/2)+0.002)) b.spawnArchetype('tw');
 
     if(random()<0.01-0.002*seasonCurve(b.tick)) b.spawnArchetype('ex');
+
+    trySpawnSouthChinaSeaDisturbance(b);
 };
 
 // -- Wild Mode -- //
@@ -7244,6 +7277,7 @@ SPAWN_RULES[SIM_MODE_WILD].archetypes = {
 SPAWN_RULES[SIM_MODE_WILD].doSpawn = function(b){
     if(random()<0.015) b.spawnArchetype('tw');
     if(random()<0.01-0.002*seasonCurve(b.tick)) b.spawnArchetype('ex');
+    trySpawnSouthChinaSeaDisturbance(b);
 };
 
 // -- Megablobs Mode -- //
@@ -7252,6 +7286,7 @@ SPAWN_RULES[SIM_MODE_MEGABLOBS].doSpawn = function(b){
     if(random()<(0.013*sq((seasonCurve(b.tick)+1)/2)+0.002)) b.spawnArchetype('tw');
 
     if(random()<0.01-0.002*seasonCurve(b.tick)) b.spawnArchetype('ex');
+    trySpawnSouthChinaSeaDisturbance(b);
 };
 
 // -- Experimental Mode -- //
@@ -7991,17 +8026,19 @@ STORM_ALGORITHM.defaults.core = function(sys,u){
     sys.depth = lerp(sys.depth,targetDepth,0.05);
 
     if(sys.genesisProgress === undefined)
-        sys.genesisProgress = 0;
+        sys.genesisProgress = (sys.type === TROP || sys.type === SUBTROP) ? 1 : 0;
 
-    const g = genesisPotential(sys.basin, sys.pos.x, sys.pos.y);
-
-    if(g > 0.55){
-        sys.genesisProgress += (g - 0.55) / 12;
+    if(sys.type === TROPWAVE || sys.type === EXTROP || sys.genesisProgress < 1){
+        const g = genesisPotential(sys.basin, sys.pos.x, sys.pos.y);
+        if(g > 0.50){
+            sys.genesisProgress += (g - 0.50) / 15;
+        }else{
+            sys.genesisProgress -= (0.50 - g) / 10;
+        }
+        sys.genesisProgress = constrain(sys.genesisProgress, 0, 1);
     }else{
-        sys.genesisProgress -= (0.55 - g) / 6;
+        sys.genesisProgress = 1;
     }
-
-    sys.genesisProgress = constrain(sys.genesisProgress, 0, 1);
 
     if(sys.pressure > 1030 || sys.interaction.kill > 0)
         sys.kill = true;
@@ -8053,17 +8090,19 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].core = function(sys,u){
     sys.depth = lerp(sys.depth,lnd ? 0.5 : map(SST,26,29,0.5,0.65,true),tropicalness*sys.organization*0.025);
 
     if(sys.genesisProgress === undefined)
-        sys.genesisProgress = 0;
+        sys.genesisProgress = (sys.type === TROP || sys.type === SUBTROP) ? 1 : 0;
 
-    const gExp = genesisPotential(sys.basin, sys.pos.x, sys.pos.y);
-
-    if(gExp > 0.55){
-        sys.genesisProgress += (gExp - 0.55) / 12;
+    if(sys.type === TROPWAVE || sys.type === EXTROP || sys.genesisProgress < 1){
+        const gExp = genesisPotential(sys.basin, sys.pos.x, sys.pos.y);
+        if(gExp > 0.50){
+            sys.genesisProgress += (gExp - 0.50) / 15;
+        }else{
+            sys.genesisProgress -= (0.50 - gExp) / 10;
+        }
+        sys.genesisProgress = constrain(sys.genesisProgress, 0, 1);
     }else{
-        sys.genesisProgress -= (0.55 - gExp) / 6;
+        sys.genesisProgress = 1;
     }
-
-    sys.genesisProgress = constrain(sys.genesisProgress, 0, 1);
 
     if(sys.kaboom > 0 && sys.kaboom < 1)
         sys.kaboom = random()<sys.kaboom ? 1 : 0;
@@ -8109,21 +8148,34 @@ STORM_ALGORITHM.defaults.typeDetermination = function(sys,u){
     if(sys.genesisProgress === undefined)
         sys.genesisProgress = (sys.type === TROP || sys.type === SUBTROP) ? 1 : 0;
 
-    let canFormWave = sys.genesisProgress >= 1 && sys.organization >= 0.45 && sys.windSpeed >= 25 && sys.lowerWarmCore >= 0.55 && sys.upperWarmCore >= 0.56;
-    let canFormDefault = sys.genesisProgress >= 1 && sys.organization >= 0.45 && sys.windSpeed >= 25 && sys.lowerWarmCore >= 0.55 && sys.upperWarmCore >= 0.57;
+    const canForm = sys.genesisProgress >= 1 && sys.organization >= 0.45 && sys.windSpeed >= 25 && sys.lowerWarmCore >= 0.55;
 
     switch(sys.type){
         case TROP:
-            sys.type = sys.lowerWarmCore<0.55 ? EXTROP : ((sys.organization<0.4 && sys.windSpeed<50) || sys.windSpeed<20) ? sys.upperWarmCore<0.56 ? EXTROP : TROPWAVE : sys.upperWarmCore<0.56 ? SUBTROP : TROP;
+            sys.type = sys.lowerWarmCore < 0.55 ? EXTROP : ((sys.organization < 0.4 && sys.windSpeed < 50) || sys.windSpeed < 20) ? (sys.upperWarmCore < 0.56 ? EXTROP : TROPWAVE) : (sys.upperWarmCore < 0.56 ? SUBTROP : TROP);
             break;
         case SUBTROP:
-            sys.type = sys.lowerWarmCore<0.55 ? EXTROP : ((sys.organization<0.4 && sys.windSpeed<50) || sys.windSpeed<20) ? sys.upperWarmCore<0.57 ? EXTROP : TROPWAVE : sys.upperWarmCore<0.57 ? SUBTROP : TROP;
+            sys.type = sys.lowerWarmCore < 0.55 ? EXTROP : ((sys.organization < 0.4 && sys.windSpeed < 50) || sys.windSpeed < 20) ? (sys.upperWarmCore < 0.57 ? EXTROP : TROPWAVE) : (sys.upperWarmCore < 0.57 ? SUBTROP : TROP);
             break;
         case TROPWAVE:
-            sys.type = sys.lowerWarmCore<0.55 ? EXTROP : (!canFormWave) ? sys.upperWarmCore<0.56 ? EXTROP : TROPWAVE : sys.upperWarmCore<0.56 ? SUBTROP : TROP;
+            if(sys.lowerWarmCore < 0.45)
+                sys.type = EXTROP;
+            else if(!canForm)
+                sys.type = TROPWAVE;
+            else if(sys.upperWarmCore < 0.56)
+                sys.type = SUBTROP;
+            else
+                sys.type = TROP;
             break;
         default:
-            sys.type = sys.lowerWarmCore<0.6 ? EXTROP : (!canFormDefault) ? sys.upperWarmCore<0.57 ? EXTROP : TROPWAVE : sys.upperWarmCore<0.57 ? SUBTROP : TROP;
+            if(sys.lowerWarmCore < 0.45)
+                sys.type = EXTROP;
+            else if(!canForm)
+                sys.type = TROPWAVE;
+            else if(sys.upperWarmCore < 0.57)
+                sys.type = SUBTROP;
+            else
+                sys.type = TROP;
     }
 };
 
