@@ -209,9 +209,11 @@ class Storm{
             let adv = this.getStormDataByTick(viewTick);
             let advC = this.getStormDataByTick(viewTick,true);
             let advX = (basin.viewingPresent() && advC) ? advC : (adv || advC);
-            let pr = (basin.viewingPresent() && advC) ? advC.pressure : (advX ? advX.pressure : 1010);
-            let st = (basin.viewingPresent() && advC) ? advC.windSpeed : (advX ? advX.windSpeed : 0);
-            let pos = (basin.viewingPresent() && advC) ? advC.pos : (advX ? advX.pos : new Vector(0,0));
+            if(!advX)
+                return;
+            let pr = advX.pressure;
+            let st = advX.windSpeed;
+            let pos = advX.pos;
             let sb = land ? land.getSubBasin(advX.coord()) : 0;
             let scale = basin.getScale(sb);
             let scaleIconData = scale.getIcon(advX);

@@ -2088,9 +2088,11 @@ class Storm{
             let adv = this.getStormDataByTick(viewTick);
             let advC = this.getStormDataByTick(viewTick,true);
             let advX = (basin.viewingPresent() && advC) ? advC : (adv || advC);
-            let pr = (basin.viewingPresent() && advC) ? advC.pressure : (advX ? advX.pressure : 1010);
-            let st = (basin.viewingPresent() && advC) ? advC.windSpeed : (advX ? advX.windSpeed : 0);
-            let pos = (basin.viewingPresent() && advC) ? advC.pos : (advX ? advX.pos : new Vector(0,0));
+            if(!advX)
+                return;
+            let pr = advX.pressure;
+            let st = advX.windSpeed;
+            let pos = advX.pos;
             let sb = land ? land.getSubBasin(advX.coord()) : 0;
             let scale = basin.getScale(sb);
             let scaleIconData = scale.getIcon(advX);
@@ -7172,25 +7174,53 @@ function genesisPotential(basin, x, y){
         dynamicsFactor = 0.1;
     }
 
-    const factors = [
+    const thermoFactors = [
         sstFactor,
         moistureFactor,
         shearFactor,
-        latitudeFactor,
-        dynamicsFactor
+        latitudeFactor
     ];
 
-    const prod = factors.reduce((a, v) => a * v, 1);
-    return Math.pow(prod, 1 / factors.length);
+    const prod = thermoFactors.reduce((a, v) => a * v, 1);
+    const thermoPotential = Math.pow(prod, 1 / thermoFactors.length);
+
+    return thermoPotential * dynamicsFactor;
+}
+
+function southChinaSeaSeasonFactor(tick) {
+    const frac = (tick % YEAR_LENGTH) / YEAR_LENGTH;
+    const m = frac * 12;
+    const arr = [
+        [0, 0.05],
+        [2, 0.05],
+        [3.5, 0.1],
+        [5, 0.45],
+        [7, 0.95],
+        [8.5, 0.85],
+        [10, 0.65],
+        [11, 0.2],
+        [12, 0.05]
+    ];
+    let prev = arr[arr.length - 1];
+    let prevX = prev[0] - 12;
+    let prevY = prev[1];
+    for (let i = 0; i < arr.length; i++) {
+        let curr = arr[i];
+        if (m < curr[0]) {
+            return map(m, prevX, curr[0], prevY, curr[1]);
+        }
+        prevX = curr[0];
+        prevY = curr[1];
+    }
+    return 0.05;
 }
 
 function trySpawnSouthChinaSeaDisturbance(basin){
     if(basin.mapType !== 8 || basin.SHem)
         return;
 
-    const rawSeason = (seasonCurve(basin.tick) + 1) / 2;
-    const seasonFactor = constrain(map(rawSeason, 0.25, 0.85, 0, 1), 0, 1);
-    if(seasonFactor <= 0)
+    const seasonFactor = southChinaSeaSeasonFactor(basin.tick);
+    if(seasonFactor < 0.1)
         return;
 
     const longitude = random(105, 120);
@@ -8037,12 +8067,24 @@ STORM_ALGORITHM.defaults.core = function(sys,u){
             sys.genesisProgress -= (0.48 - g) / 8;
         }
 
-        if(sys.windSpeed >= 30 && sys.organization >= 0.50 && sys.lowerWarmCore >= 0.58){
+        const strongPreGenesis =
+            g >= 0.52 &&
+            sys.windSpeed >= 30 &&
+            sys.organization >= 0.50 &&
+            sys.lowerWarmCore >= 0.58;
+
+        if(strongPreGenesis){
             sys.genesisProgress = max(sys.genesisProgress, 0.85);
         }
-        if(sys.pressure < 998 && sys.windSpeed >= 34){
+
+        const decisiveGenesis =
+            g >= 0.55 &&
+            sys.genesisProgress >= 0.82 &&
+            sys.pressure < 998 &&
+            sys.windSpeed >= 34;
+
+        if(decisiveGenesis)
             sys.genesisProgress = 1;
-        }
 
         sys.genesisProgress = constrain(sys.genesisProgress, 0, 1);
     }else{
@@ -8108,19 +8150,31 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].core = function(sys,u){
         sys.genesisProgress = (sys.type === TROP || sys.type === SUBTROP) ? 1 : 0;
 
     if(sys.type === TROPWAVE || sys.type === EXTROP || sys.genesisProgress < 1){
-        const gExp = genesisPotential(sys.basin, sys.pos.x, sys.pos.y);
-        if(gExp > 0.48){
-            sys.genesisProgress += (gExp - 0.48) / 14;
+        const g = genesisPotential(sys.basin, sys.pos.x, sys.pos.y);
+        if(g > 0.48){
+            sys.genesisProgress += (g - 0.48) / 14;
         }else{
-            sys.genesisProgress -= (0.48 - gExp) / 8;
+            sys.genesisProgress -= (0.48 - g) / 8;
         }
 
-        if(sys.windSpeed >= 30 && sys.organization >= 0.50 && sys.lowerWarmCore >= 0.58){
+        const strongPreGenesis =
+            g >= 0.52 &&
+            sys.windSpeed >= 30 &&
+            sys.organization >= 0.50 &&
+            sys.lowerWarmCore >= 0.58;
+
+        if(strongPreGenesis){
             sys.genesisProgress = max(sys.genesisProgress, 0.85);
         }
-        if(sys.pressure < 998 && sys.windSpeed >= 34){
+
+        const decisiveGenesis =
+            g >= 0.55 &&
+            sys.genesisProgress >= 0.82 &&
+            sys.pressure < 998 &&
+            sys.windSpeed >= 34;
+
+        if(decisiveGenesis)
             sys.genesisProgress = 1;
-        }
 
         sys.genesisProgress = constrain(sys.genesisProgress, 0, 1);
     }else{
@@ -8212,12 +8266,12 @@ STORM_ALGORITHM.defaults.typeDetermination = function(sys,u){
 // Version number of a simulation mode's storm algorithm
 // Used for upgrading the active attribute values if needed
 
-STORM_ALGORITHM[SIM_MODE_NORMAL].version = 1;
-STORM_ALGORITHM[SIM_MODE_HYPER].version = 1;
-STORM_ALGORITHM[SIM_MODE_WILD].version = 1;
-STORM_ALGORITHM[SIM_MODE_MEGABLOBS].version = 1;
-STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].version = 2;
-STORM_ALGORITHM[SIM_MODE_SPOOKY].version = 1;
+STORM_ALGORITHM[SIM_MODE_NORMAL].version = 2;
+STORM_ALGORITHM[SIM_MODE_HYPER].version = 2;
+STORM_ALGORITHM[SIM_MODE_WILD].version = 2;
+STORM_ALGORITHM[SIM_MODE_MEGABLOBS].version = 2;
+STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].version = 3;
+STORM_ALGORITHM[SIM_MODE_SPOOKY].version = 2;
 
 // -- Upgrade -- //
 // Converts active attributes in case an active system is loaded after an algorithm change breaks old values
@@ -8231,8 +8285,15 @@ STORM_ALGORITHM[SIM_MODE_SPOOKY].upgrade = function(sys,data,oldVersion){
     sys.lowerWarmCore = data.lowerWarmCore || 0;
     sys.upperWarmCore = data.upperWarmCore || 0;
     sys.depth = data.depth || 0;
-    if(oldVersion < 1)
+    if(oldVersion < 1){
         sys.genesisProgress = (sys.type === TROP || sys.type === SUBTROP || data.type === TROP || data.type === SUBTROP) ? 1 : 0;
+    }
+    if(oldVersion < 2){
+        if(sys.type === TROP || sys.type === SUBTROP || data.type === TROP || data.type === SUBTROP)
+            sys.genesisProgress = 1;
+        else
+            sys.genesisProgress = constrain(data.genesisProgress || 0, 0, 0.85);
+    }
 };
 
 STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].upgrade = function(sys,data,oldVersion){
@@ -8245,6 +8306,12 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].upgrade = function(sys,data,oldVersion){
     }
     if(oldVersion < 2){
         sys.genesisProgress = (sys.type === TROP || sys.type === SUBTROP || data.type === TROP || data.type === SUBTROP) ? 1 : 0;
+    }
+    if(oldVersion < 3){
+        if(sys.type === TROP || sys.type === SUBTROP || data.type === TROP || data.type === SUBTROP)
+            sys.genesisProgress = 1;
+        else
+            sys.genesisProgress = constrain(data.genesisProgress || 0, 0, 0.85);
     }
 };
 
