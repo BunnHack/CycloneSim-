@@ -240,14 +240,14 @@ function genesisPotential(basin, x, y){
     const latitudeFactor = lowLatitudeFactor * highLatitudeFactor;
     if(latitudeFactor === 0) return 0;
 
-    let dynamicsFactor = 0.1;
+    let dynamicsFactor = 0.2;
     try {
         const dynamics = lowLevelDynamics(basin, x, y, t);
-        const vorticityFactor = constrain(map(dynamics.vorticity, 0, 0.03, 0, 1), 0, 1);
-        const convergenceFactor = constrain(map(dynamics.convergence, 0, 0.03, 0, 1), 0, 1);
-        dynamicsFactor = 0.1 + 0.9 * (vorticityFactor * 0.5 + convergenceFactor * 0.5);
+        const vorticityFactor = constrain(map(dynamics.vorticity, -0.005, 0.02, 0, 1), 0, 1);
+        const convergenceFactor = constrain(map(dynamics.convergence, -0.005, 0.02, 0, 1), 0, 1);
+        dynamicsFactor = 0.2 + 0.8 * (vorticityFactor * 0.5 + convergenceFactor * 0.5);
     } catch(e) {
-        dynamicsFactor = 0.1;
+        dynamicsFactor = 0.2;
     }
 
     const thermoFactors = [
@@ -1167,10 +1167,21 @@ STORM_ALGORITHM.defaults.core = function(sys,u){
         sys.genesisProgress = 1;
     }
 
-    if(sys.type === TROPWAVE && sys.genesisProgress < 1){
-        const floorPressure = map(sys.genesisProgress, 0, 1, 1005, 995);
-        if(sys.pressure < floorPressure)
-            sys.pressure = lerp(sys.pressure, floorPressure, 0.2);
+    if(sys.type === TROPWAVE && !canTropicalCycloneForm(sys)){
+        const minPressure = map(
+            sys.genesisProgress,
+            0, 1,
+            1008, 1000
+        );
+
+        const maxWind = map(
+            sys.genesisProgress,
+            0, 1,
+            24, 33
+        );
+
+        sys.pressure = max(sys.pressure, minPressure);
+        sys.windSpeed = min(sys.windSpeed, maxWind);
     }
 
     if(sys.pressure > 1030 || sys.interaction.kill > 0)
@@ -1257,10 +1268,21 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].core = function(sys,u){
         sys.genesisProgress = 1;
     }
 
-    if(sys.type === TROPWAVE && sys.genesisProgress < 1){
-        const floorPressure = map(sys.genesisProgress, 0, 1, 1005, 995);
-        if(sys.pressure < floorPressure)
-            sys.pressure = lerp(sys.pressure, floorPressure, 0.2);
+    if(sys.type === TROPWAVE && !canTropicalCycloneForm(sys)){
+        const minPressure = map(
+            sys.genesisProgress,
+            0, 1,
+            1008, 1000
+        );
+
+        const maxWind = map(
+            sys.genesisProgress,
+            0, 1,
+            24, 33
+        );
+
+        sys.pressure = max(sys.pressure, minPressure);
+        sys.windSpeed = min(sys.windSpeed, maxWind);
     }
 
     if(sys.kaboom > 0 && sys.kaboom < 1)
@@ -1303,11 +1325,18 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].core = function(sys,u){
 
 // -- Type Determination -- //
 
+function canTropicalCycloneForm(sys){
+    return (sys.genesisProgress || 0) >= 1 &&
+        (sys.organization || 0) >= 0.45 &&
+        (sys.windSpeed || 0) >= 25 &&
+        (sys.lowerWarmCore || 0) >= 0.55;
+}
+
 STORM_ALGORITHM.defaults.typeDetermination = function(sys,u){
     if(sys.genesisProgress === undefined)
         sys.genesisProgress = (sys.type === TROP || sys.type === SUBTROP) ? 1 : 0;
 
-    const canForm = sys.genesisProgress >= 1 && sys.organization >= 0.45 && sys.windSpeed >= 25 && sys.lowerWarmCore >= 0.55;
+    const canForm = canTropicalCycloneForm(sys);
 
     switch(sys.type){
         case TROP:
