@@ -84,15 +84,17 @@ let initialPanY = 0;
 let hasDraggedMap = false;
 
 function constrainPan() {
+  const W = (window as any).WIDTH || 960;
+  const H = (window as any).HEIGHT || 540;
   if (mapZoom <= 1) {
     mapZoom = 1;
     mapPanX = 0;
     mapPanY = 0;
     return;
   }
-  const minPanX = 1440 * (1 - mapZoom);
+  const minPanX = W * (1 - mapZoom);
   const maxPanX = 0;
-  const minPanY = 720 * (1 - mapZoom);
+  const minPanY = H * (1 - mapZoom);
   const maxPanY = 0;
 
   mapPanX = Math.min(Math.max(mapPanX, minPanX), maxPanX);
@@ -100,8 +102,10 @@ function constrainPan() {
 }
 
 function zoomMapAt(factor: number, screenX?: number, screenY?: number) {
-  if (screenX === undefined) screenX = 1440 / 2;
-  if (screenY === undefined) screenY = 720 / 2;
+  const W = (window as any).WIDTH || 960;
+  const H = (window as any).HEIGHT || 540;
+  if (screenX === undefined) screenX = W / 2;
+  if (screenY === undefined) screenY = H / 2;
 
   const oldZoom = mapZoom;
   let newZoom = mapZoom * factor;
@@ -185,14 +189,30 @@ function degrees(radians: number): number {
   return radians * (180 / Math.PI);
 }
 
-function random(minOrMax?: number, maxVal?: number): number {
+let randomState = 123456789;
+
+function randomSeed(seed: number) {
+  randomState = (seed >>> 0) || 1;
+}
+
+function seededRandom(): number {
+  randomState = (1664525 * randomState + 1013904223) >>> 0;
+  return randomState / 4294967296;
+}
+
+function random(minOrMax?: any, maxVal?: number): any {
+  if (Array.isArray(minOrMax)) {
+    if (minOrMax.length === 0) return undefined;
+    const idx = Math.floor(seededRandom() * minOrMax.length);
+    return minOrMax[idx];
+  }
   if (minOrMax === undefined) {
-    return Math.random();
+    return seededRandom();
   }
   if (maxVal === undefined) {
-    return Math.random() * minOrMax;
+    return seededRandom() * minOrMax;
   }
-  return minOrMax + Math.random() * (maxVal - minOrMax);
+  return minOrMax + seededRandom() * (maxVal - minOrMax);
 }
 
 // Perlin Noise (Improved Noise algorithm)
@@ -1423,7 +1443,7 @@ Object.assign(window, {
   RGB, HSB, CENTER, LEFT, RIGHT, TOP, BOTTOM, NORMAL, ITALIC,
   ESCAPE, ENTER, UP_ARROW, DOWN_ARROW, LEFT_ARROW, RIGHT_ARROW, BACKSPACE, DELETE, SHIFT, CONTROL,
   floor, ceil, round, abs, min, max, sqrt, pow, cos, sin, atan2, log, atan,
-  constrain, dist, map, lerp, sq, radians, degrees, random,
+  constrain, dist, map, lerp, sq, radians, degrees, random, randomSeed,
   noise, noiseDetail, noiseSeed,
   Color, hsbToRgb, rgbToHsb, brightness, red, green, blue, alpha, parseColor,
   PImage, CanvasBuffer, createCanvas, background, fill, noFill, stroke, noStroke, strokeWeight, colorMode,
@@ -6889,7 +6909,7 @@ class Land{
         
         x = floor(x/ENV_LAYER_TILE_SIZE);
         y = floor(y/ENV_LAYER_TILE_SIZE);
-        return this.oceanTile[x][y];
+        return !!(this.oceanTile[x] && this.oceanTile[x][y]);
     }
 
     clearSnow(){
@@ -7124,11 +7144,13 @@ SPAWN_RULES.defaults.archetypes = {
 
 function lowLevelDynamics(basin, x, y, t){
     const d = 10;
+    const sx = constrain(x, d, WIDTH - 1 - d);
+    const sy = constrain(y, d, HEIGHT - 1 - d);
 
-    const east = basin.env.get("LLSteering", x + d, y, t).copy();
-    const west = basin.env.get("LLSteering", x - d, y, t).copy();
-    const south = basin.env.get("LLSteering", x, y + d, t).copy();
-    const north = basin.env.get("LLSteering", x, y - d, t).copy();
+    const east = basin.env.get("LLSteering", sx + d, sy, t).copy();
+    const west = basin.env.get("LLSteering", sx - d, sy, t).copy();
+    const south = basin.env.get("LLSteering", sx, sy + d, t).copy();
+    const north = basin.env.get("LLSteering", sx, sy - d, t).copy();
 
     const duDx = (east.x - west.x) / (2 * d);
     const dvDx = (east.y - west.y) / (2 * d);
@@ -7226,9 +7248,8 @@ function southChinaSeaSeasonFactor(tick) {
 }
 
 function sampleTwLocation(b) {
-    let bestX = random(0, WIDTH - 1);
-    let bestY = b.hemY(random(HEIGHT * 0.65, HEIGHT * 0.9));
-    let maxScore = -1;
+    let best = undefined;
+    let maxScore = -Infinity;
 
     for (let i = 0; i < 25; i++) {
         let rx = random(0, WIDTH - 1);
@@ -7253,11 +7274,19 @@ function sampleTwLocation(b) {
         let score = pot + random(0, 0.4);
         if (score > maxScore) {
             maxScore = score;
-            bestX = rx;
-            bestY = ry;
+            best = { x: rx, y: ry };
         }
     }
-    return { x: bestX, y: bestY };
+    return best;
+}
+
+function spawnSampledTropicalWave(basin) {
+    const loc = sampleTwLocation(basin);
+    if (loc) {
+        basin.spawnArchetype('tw', loc.x, loc.y);
+        return true;
+    }
+    return false;
 }
 
 function trySpawnSouthChinaSeaDisturbance(basin){
@@ -7311,7 +7340,7 @@ function trySpawnSouthChinaSeaDisturbance(basin){
 
 SPAWN_RULES.defaults.doSpawn = function(b){
     // tropical waves
-    if(random()<0.015*sq((seasonCurve(b.tick)+1)/2)) b.spawnArchetype('tw');
+    if(random()<0.015*sq((seasonCurve(b.tick)+1)/2)) spawnSampledTropicalWave(b);
 
     // extratropical cyclones
     if(random()<0.01-0.002*seasonCurve(b.tick)) b.spawnArchetype('ex');
@@ -7327,7 +7356,7 @@ SPAWN_RULES[SIM_MODE_NORMAL].doSpawn = SPAWN_RULES.defaults.doSpawn;
 // -- Hyper Mode -- //
 
 SPAWN_RULES[SIM_MODE_HYPER].doSpawn = function(b){
-    if(random()<(0.013*sq((seasonCurve(b.tick)+1)/2)+0.002)) b.spawnArchetype('tw');
+    if(random()<(0.013*sq((seasonCurve(b.tick)+1)/2)+0.002)) spawnSampledTropicalWave(b);
 
     if(random()<0.01-0.002*seasonCurve(b.tick)) b.spawnArchetype('ex');
 
@@ -7340,8 +7369,11 @@ SPAWN_RULES[SIM_MODE_WILD].archetypes = {
     'tw': {
         x: (b) => {
             let loc = sampleTwLocation(b);
-            b._tempTwY = loc.y;
-            return loc.x;
+            if (loc) {
+                b._tempTwY = loc.y;
+                return loc.x;
+            }
+            return random(0, WIDTH - 1);
         },
         y: (b, x) => {
             let y = b._tempTwY !== undefined ? b._tempTwY : b.hemY(random(HEIGHT * 0.2, HEIGHT * 0.9));
@@ -7359,7 +7391,7 @@ SPAWN_RULES[SIM_MODE_WILD].archetypes = {
 };
 
 SPAWN_RULES[SIM_MODE_WILD].doSpawn = function(b){
-    if(random()<0.015) b.spawnArchetype('tw');
+    if(random()<0.015) spawnSampledTropicalWave(b);
     if(random()<0.01-0.002*seasonCurve(b.tick)) b.spawnArchetype('ex');
     trySpawnSouthChinaSeaDisturbance(b);
 };
@@ -7367,7 +7399,7 @@ SPAWN_RULES[SIM_MODE_WILD].doSpawn = function(b){
 // -- Megablobs Mode -- //
 
 SPAWN_RULES[SIM_MODE_MEGABLOBS].doSpawn = function(b){
-    if(random()<(0.013*sq((seasonCurve(b.tick)+1)/2)+0.002)) b.spawnArchetype('tw');
+    if(random()<(0.013*sq((seasonCurve(b.tick)+1)/2)+0.002)) spawnSampledTropicalWave(b);
 
     if(random()<0.01-0.002*seasonCurve(b.tick)) b.spawnArchetype('ex');
     trySpawnSouthChinaSeaDisturbance(b);
@@ -11861,6 +11893,7 @@ function setup(){
 
 function draw(){
     try{
+        resetMatrix();
         scale(scaler);
         background(COLORS.bg);
         if(waitingFor<1){   // waitingFor applies to asynchronous processes such as saving and loading

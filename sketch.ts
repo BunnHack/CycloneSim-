@@ -111,6 +111,7 @@ function setup(){
 
 function draw(){
     try{
+        resetMatrix();
         scale(scaler);
         background(COLORS.bg);
         if(waitingFor<1){   // waitingFor applies to asynchronous processes such as saving and loading

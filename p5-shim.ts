@@ -77,15 +77,17 @@ let initialPanY = 0;
 let hasDraggedMap = false;
 
 function constrainPan() {
+  const W = (window as any).WIDTH || 960;
+  const H = (window as any).HEIGHT || 540;
   if (mapZoom <= 1) {
     mapZoom = 1;
     mapPanX = 0;
     mapPanY = 0;
     return;
   }
-  const minPanX = 1440 * (1 - mapZoom);
+  const minPanX = W * (1 - mapZoom);
   const maxPanX = 0;
-  const minPanY = 720 * (1 - mapZoom);
+  const minPanY = H * (1 - mapZoom);
   const maxPanY = 0;
 
   mapPanX = Math.min(Math.max(mapPanX, minPanX), maxPanX);
@@ -93,8 +95,10 @@ function constrainPan() {
 }
 
 function zoomMapAt(factor: number, screenX?: number, screenY?: number) {
-  if (screenX === undefined) screenX = 1440 / 2;
-  if (screenY === undefined) screenY = 720 / 2;
+  const W = (window as any).WIDTH || 960;
+  const H = (window as any).HEIGHT || 540;
+  if (screenX === undefined) screenX = W / 2;
+  if (screenY === undefined) screenY = H / 2;
 
   const oldZoom = mapZoom;
   let newZoom = mapZoom * factor;
@@ -178,14 +182,30 @@ function degrees(radians: number): number {
   return radians * (180 / Math.PI);
 }
 
-function random(minOrMax?: number, maxVal?: number): number {
+let randomState = 123456789;
+
+function randomSeed(seed: number) {
+  randomState = (seed >>> 0) || 1;
+}
+
+function seededRandom(): number {
+  randomState = (1664525 * randomState + 1013904223) >>> 0;
+  return randomState / 4294967296;
+}
+
+function random(minOrMax?: any, maxVal?: number): any {
+  if (Array.isArray(minOrMax)) {
+    if (minOrMax.length === 0) return undefined;
+    const idx = Math.floor(seededRandom() * minOrMax.length);
+    return minOrMax[idx];
+  }
   if (minOrMax === undefined) {
-    return Math.random();
+    return seededRandom();
   }
   if (maxVal === undefined) {
-    return Math.random() * minOrMax;
+    return seededRandom() * minOrMax;
   }
-  return minOrMax + Math.random() * (maxVal - minOrMax);
+  return minOrMax + seededRandom() * (maxVal - minOrMax);
 }
 
 // Perlin Noise (Improved Noise algorithm)
@@ -1416,7 +1436,7 @@ Object.assign(window, {
   RGB, HSB, CENTER, LEFT, RIGHT, TOP, BOTTOM, NORMAL, ITALIC,
   ESCAPE, ENTER, UP_ARROW, DOWN_ARROW, LEFT_ARROW, RIGHT_ARROW, BACKSPACE, DELETE, SHIFT, CONTROL,
   floor, ceil, round, abs, min, max, sqrt, pow, cos, sin, atan2, log, atan,
-  constrain, dist, map, lerp, sq, radians, degrees, random,
+  constrain, dist, map, lerp, sq, radians, degrees, random, randomSeed,
   noise, noiseDetail, noiseSeed,
   Color, hsbToRgb, rgbToHsb, brightness, red, green, blue, alpha, parseColor,
   PImage, CanvasBuffer, createCanvas, background, fill, noFill, stroke, noStroke, strokeWeight, colorMode,

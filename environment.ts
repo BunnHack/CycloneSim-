@@ -859,7 +859,7 @@ class Land{
         
         x = floor(x/ENV_LAYER_TILE_SIZE);
         y = floor(y/ENV_LAYER_TILE_SIZE);
-        return this.oceanTile[x][y];
+        return !!(this.oceanTile[x] && this.oceanTile[x][y]);
     }
 
     clearSnow(){

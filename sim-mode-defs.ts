@@ -199,11 +199,13 @@ SPAWN_RULES.defaults.archetypes = {
 
 function lowLevelDynamics(basin, x, y, t){
     const d = 10;
+    const sx = constrain(x, d, WIDTH - 1 - d);
+    const sy = constrain(y, d, HEIGHT - 1 - d);
 
-    const east = basin.env.get("LLSteering", x + d, y, t).copy();
-    const west = basin.env.get("LLSteering", x - d, y, t).copy();
-    const south = basin.env.get("LLSteering", x, y + d, t).copy();
-    const north = basin.env.get("LLSteering", x, y - d, t).copy();
+    const east = basin.env.get("LLSteering", sx + d, sy, t).copy();
+    const west = basin.env.get("LLSteering", sx - d, sy, t).copy();
+    const south = basin.env.get("LLSteering", sx, sy + d, t).copy();
+    const north = basin.env.get("LLSteering", sx, sy - d, t).copy();
 
     const duDx = (east.x - west.x) / (2 * d);
     const dvDx = (east.y - west.y) / (2 * d);
@@ -301,9 +303,8 @@ function southChinaSeaSeasonFactor(tick) {
 }
 
 function sampleTwLocation(b) {
-    let bestX = random(0, WIDTH - 1);
-    let bestY = b.hemY(random(HEIGHT * 0.65, HEIGHT * 0.9));
-    let maxScore = -1;
+    let best = undefined;
+    let maxScore = -Infinity;
 
     for (let i = 0; i < 25; i++) {
         let rx = random(0, WIDTH - 1);
@@ -328,11 +329,19 @@ function sampleTwLocation(b) {
         let score = pot + random(0, 0.4);
         if (score > maxScore) {
             maxScore = score;
-            bestX = rx;
-            bestY = ry;
+            best = { x: rx, y: ry };
         }
     }
-    return { x: bestX, y: bestY };
+    return best;
+}
+
+function spawnSampledTropicalWave(basin) {
+    const loc = sampleTwLocation(basin);
+    if (loc) {
+        basin.spawnArchetype('tw', loc.x, loc.y);
+        return true;
+    }
+    return false;
 }
 
 function trySpawnSouthChinaSeaDisturbance(basin){
@@ -386,7 +395,7 @@ function trySpawnSouthChinaSeaDisturbance(basin){
 
 SPAWN_RULES.defaults.doSpawn = function(b){
     // tropical waves
-    if(random()<0.015*sq((seasonCurve(b.tick)+1)/2)) b.spawnArchetype('tw');
+    if(random()<0.015*sq((seasonCurve(b.tick)+1)/2)) spawnSampledTropicalWave(b);
 
     // extratropical cyclones
     if(random()<0.01-0.002*seasonCurve(b.tick)) b.spawnArchetype('ex');
@@ -402,7 +411,7 @@ SPAWN_RULES[SIM_MODE_NORMAL].doSpawn = SPAWN_RULES.defaults.doSpawn;
 // -- Hyper Mode -- //
 
 SPAWN_RULES[SIM_MODE_HYPER].doSpawn = function(b){
-    if(random()<(0.013*sq((seasonCurve(b.tick)+1)/2)+0.002)) b.spawnArchetype('tw');
+    if(random()<(0.013*sq((seasonCurve(b.tick)+1)/2)+0.002)) spawnSampledTropicalWave(b);
 
     if(random()<0.01-0.002*seasonCurve(b.tick)) b.spawnArchetype('ex');
 
@@ -415,8 +424,11 @@ SPAWN_RULES[SIM_MODE_WILD].archetypes = {
     'tw': {
         x: (b) => {
             let loc = sampleTwLocation(b);
-            b._tempTwY = loc.y;
-            return loc.x;
+            if (loc) {
+                b._tempTwY = loc.y;
+                return loc.x;
+            }
+            return random(0, WIDTH - 1);
         },
         y: (b, x) => {
             let y = b._tempTwY !== undefined ? b._tempTwY : b.hemY(random(HEIGHT * 0.2, HEIGHT * 0.9));
@@ -434,7 +446,7 @@ SPAWN_RULES[SIM_MODE_WILD].archetypes = {
 };
 
 SPAWN_RULES[SIM_MODE_WILD].doSpawn = function(b){
-    if(random()<0.015) b.spawnArchetype('tw');
+    if(random()<0.015) spawnSampledTropicalWave(b);
     if(random()<0.01-0.002*seasonCurve(b.tick)) b.spawnArchetype('ex');
     trySpawnSouthChinaSeaDisturbance(b);
 };
@@ -442,7 +454,7 @@ SPAWN_RULES[SIM_MODE_WILD].doSpawn = function(b){
 // -- Megablobs Mode -- //
 
 SPAWN_RULES[SIM_MODE_MEGABLOBS].doSpawn = function(b){
-    if(random()<(0.013*sq((seasonCurve(b.tick)+1)/2)+0.002)) b.spawnArchetype('tw');
+    if(random()<(0.013*sq((seasonCurve(b.tick)+1)/2)+0.002)) spawnSampledTropicalWave(b);
 
     if(random()<0.01-0.002*seasonCurve(b.tick)) b.spawnArchetype('ex');
     trySpawnSouthChinaSeaDisturbance(b);
