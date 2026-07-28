@@ -165,7 +165,7 @@ class Storm{
 
     getFullNameByTick(t){
         let basin = this.basin;
-        let data = t==="peak" ? this.windPeak : this.getStormDataByTick(t);
+        let data = t==="peak" ? this.windPeak : ((t === viewTick && basin.viewingPresent()) ? this.getStormDataByTick(t, true) : this.getStormDataByTick(t));
         let name = this.getNameByTick(t==='peak' ? -1 : t);
         let ty = data ? data.type : null;
         let clsnNom = (data && land) ? basin.getScale(land.getSubBasin(data.coord())).getStormNom(data) : null;
@@ -208,10 +208,10 @@ class Storm{
             let basin = this.basin;
             let adv = this.getStormDataByTick(viewTick);
             let advC = this.getStormDataByTick(viewTick,true);
-            let advX = adv ? adv : advC;
-            let pr = advC.pressure;
-            let st = advC.windSpeed;
-            let pos = advC.pos;
+            let advX = (basin.viewingPresent() && advC) ? advC : (adv || advC);
+            let pr = (basin.viewingPresent() && advC) ? advC.pressure : (advX ? advX.pressure : 1010);
+            let st = (basin.viewingPresent() && advC) ? advC.windSpeed : (advX ? advX.windSpeed : 0);
+            let pos = (basin.viewingPresent() && advC) ? advC.pos : (advX ? advX.pos : new Vector(0,0));
             let sb = land ? land.getSubBasin(advX.coord()) : 0;
             let scale = basin.getScale(sb);
             let scaleIconData = scale.getIcon(advX);

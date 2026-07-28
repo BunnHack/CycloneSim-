@@ -202,10 +202,10 @@ function lowLevelDynamics(basin, x, y, t){
     const duDy_screen = (south.x - north.x) / (2 * d);
     const dvDy_screen = (south.y - north.y) / (2 * d);
 
-    const vorticity_math = dvDx + duDy_screen;
-    const convergence = -(duDx - dvDy_screen);
+    const vorticity_nh = duDy_screen - dvDx;
+    const convergence = -(duDx + dvDy_screen);
 
-    const cyclonicVorticity = basin.SHem ? -vorticity_math : vorticity_math;
+    const cyclonicVorticity = basin.SHem ? -vorticity_nh : vorticity_nh;
 
     return {
         vorticity: cyclonicVorticity,
@@ -240,14 +240,14 @@ function genesisPotential(basin, x, y){
     const latitudeFactor = lowLatitudeFactor * highLatitudeFactor;
     if(latitudeFactor === 0) return 0;
 
-    let dynamicsFactor = 0.5;
+    let dynamicsFactor = 0.1;
     try {
         const dynamics = lowLevelDynamics(basin, x, y, t);
         const vorticityFactor = constrain(map(dynamics.vorticity, 0, 0.03, 0, 1), 0, 1);
         const convergenceFactor = constrain(map(dynamics.convergence, 0, 0.03, 0, 1), 0, 1);
-        dynamicsFactor = 0.5 + 0.5 * (vorticityFactor * 0.5 + convergenceFactor * 0.5);
+        dynamicsFactor = 0.1 + 0.9 * (vorticityFactor * 0.5 + convergenceFactor * 0.5);
     } catch(e) {
-        dynamicsFactor = 0.5;
+        dynamicsFactor = 0.1;
     }
 
     const factors = [
@@ -266,8 +266,9 @@ function trySpawnSouthChinaSeaDisturbance(basin){
     if(basin.mapType !== 8 || basin.SHem)
         return;
 
-    const seasonFactor = constrain((seasonCurve(basin.tick) + 1) / 2, 0, 1);
-    if(seasonFactor < 0.15)
+    const rawSeason = (seasonCurve(basin.tick) + 1) / 2;
+    const seasonFactor = constrain(map(rawSeason, 0.25, 0.85, 0, 1), 0, 1);
+    if(seasonFactor <= 0)
         return;
 
     const longitude = random(105, 120);
@@ -300,7 +301,7 @@ function trySpawnSouthChinaSeaDisturbance(basin){
         pos.y
     );
 
-    const disturbanceChance = (0.0001 + 0.001 * potential) * sq(seasonFactor);
+    const disturbanceChance = (0.0001 + 0.0012 * potential) * seasonFactor;
 
     if(random() < disturbanceChance){
         basin.spawnArchetype(
@@ -1108,14 +1109,28 @@ STORM_ALGORITHM.defaults.core = function(sys,u){
 
     if(sys.type === TROPWAVE || sys.type === EXTROP || sys.genesisProgress < 1){
         const g = genesisPotential(sys.basin, sys.pos.x, sys.pos.y);
-        if(g > 0.50){
-            sys.genesisProgress += (g - 0.50) / 15;
+        if(g > 0.48){
+            sys.genesisProgress += (g - 0.48) / 14;
         }else{
-            sys.genesisProgress -= (0.50 - g) / 10;
+            sys.genesisProgress -= (0.48 - g) / 8;
         }
+
+        if(sys.windSpeed >= 30 && sys.organization >= 0.50 && sys.lowerWarmCore >= 0.58){
+            sys.genesisProgress = max(sys.genesisProgress, 0.85);
+        }
+        if(sys.pressure < 998 && sys.windSpeed >= 34){
+            sys.genesisProgress = 1;
+        }
+
         sys.genesisProgress = constrain(sys.genesisProgress, 0, 1);
     }else{
         sys.genesisProgress = 1;
+    }
+
+    if(sys.type === TROPWAVE && sys.genesisProgress < 1){
+        const floorPressure = map(sys.genesisProgress, 0, 1, 1005, 995);
+        if(sys.pressure < floorPressure)
+            sys.pressure = lerp(sys.pressure, floorPressure, 0.2);
     }
 
     if(sys.pressure > 1030 || sys.interaction.kill > 0)
@@ -1172,14 +1187,28 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].core = function(sys,u){
 
     if(sys.type === TROPWAVE || sys.type === EXTROP || sys.genesisProgress < 1){
         const gExp = genesisPotential(sys.basin, sys.pos.x, sys.pos.y);
-        if(gExp > 0.50){
-            sys.genesisProgress += (gExp - 0.50) / 15;
+        if(gExp > 0.48){
+            sys.genesisProgress += (gExp - 0.48) / 14;
         }else{
-            sys.genesisProgress -= (0.50 - gExp) / 10;
+            sys.genesisProgress -= (0.48 - gExp) / 8;
         }
+
+        if(sys.windSpeed >= 30 && sys.organization >= 0.50 && sys.lowerWarmCore >= 0.58){
+            sys.genesisProgress = max(sys.genesisProgress, 0.85);
+        }
+        if(sys.pressure < 998 && sys.windSpeed >= 34){
+            sys.genesisProgress = 1;
+        }
+
         sys.genesisProgress = constrain(sys.genesisProgress, 0, 1);
     }else{
         sys.genesisProgress = 1;
+    }
+
+    if(sys.type === TROPWAVE && sys.genesisProgress < 1){
+        const floorPressure = map(sys.genesisProgress, 0, 1, 1005, 995);
+        if(sys.pressure < floorPressure)
+            sys.pressure = lerp(sys.pressure, floorPressure, 0.2);
     }
 
     if(sys.kaboom > 0 && sys.kaboom < 1)
@@ -1281,7 +1310,7 @@ STORM_ALGORITHM[SIM_MODE_SPOOKY].upgrade = function(sys,data,oldVersion){
     sys.upperWarmCore = data.upperWarmCore || 0;
     sys.depth = data.depth || 0;
     if(oldVersion < 1)
-        sys.genesisProgress = 0;
+        sys.genesisProgress = (sys.type === TROP || sys.type === SUBTROP || data.type === TROP || data.type === SUBTROP) ? 1 : 0;
 };
 
 STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].upgrade = function(sys,data,oldVersion){
@@ -1293,7 +1322,7 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].upgrade = function(sys,data,oldVersion){
         sys.kaboom = 0;
     }
     if(oldVersion < 2){
-        sys.genesisProgress = 0;
+        sys.genesisProgress = (sys.type === TROP || sys.type === SUBTROP || data.type === TROP || data.type === SUBTROP) ? 1 : 0;
     }
 };
 
