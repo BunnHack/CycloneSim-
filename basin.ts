@@ -78,6 +78,7 @@ class Basin{
             let mapImg;
             Basin.deleteSave(AUTOSAVE_SAVE_NAME);
             let f = ()=>{
+                randomSeed(this.seed);
                 noiseSeed(this.seed);
                 this.env.init();
                 land = new Land(this, mapImg);
@@ -728,6 +729,7 @@ class Basin{
                 }
                 return b;
             }).then(b=>{
+                randomSeed(b.seed);
                 noiseSeed(b.seed);
                 land = new Land(b, mapImg);
                 return b.fetchSeason(-1,true,false,true).then(s=>{

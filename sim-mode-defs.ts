@@ -326,7 +326,7 @@ function sampleTwLocation(b) {
             pot = genesisPotential(b, rx, ry);
         } catch(e) {}
 
-        let score = pot + random(0, 0.4);
+        let score = pot + random(0, 0.08);
         if (score > maxScore) {
             maxScore = score;
             best = { x: rx, y: ry };
@@ -897,7 +897,9 @@ ENV_DEFS.defaults.SSTAnomaly = {
         v = -r*v;
         v = v*i;
         if(u.modifiers.bigBlobBase!==undefined && v>u.modifiers.bigBlobExponentThreshold) v += pow(u.modifiers.bigBlobBase,v-u.modifiers.bigBlobExponentThreshold)-1;
-        return v;
+        const anomalyMin = u.modifiers.anomalyMin !== undefined ? u.modifiers.anomalyMin : -6;
+        const anomalyMax = u.modifiers.anomalyMax !== undefined ? u.modifiers.anomalyMax : 6;
+        return constrain(v, anomalyMin, anomalyMax);
     },
     displayFormat: v=>{
         let str = '';
@@ -935,9 +937,11 @@ ENV_DEFS[SIM_MODE_WILD].SSTAnomaly = {
 };
 ENV_DEFS[SIM_MODE_MEGABLOBS].SSTAnomaly = {
     modifiers: {
-        r: 7,
-        bigBlobBase: 1.8,
-        bigBlobExponentThreshold: 1
+        r: 4.5,
+        bigBlobBase: 1.4,
+        bigBlobExponentThreshold: 1.3,
+        anomalyMin: -3.5,
+        anomalyMax: 5
     }
 };
 ENV_DEFS[SIM_MODE_EXPERIMENTAL].SSTAnomaly = {};
@@ -1014,10 +1018,10 @@ ENV_DEFS[SIM_MODE_WILD].SST = {
 };
 ENV_DEFS[SIM_MODE_MEGABLOBS].SST = {
     modifiers: {
-        offSeasonPolarTemp: -5,
-        peakSeasonPolarTemp: 20,
-        offSeasonTropicsTemp: 23,
-        peakSeasonTropicsTemp: 28.5
+        offSeasonPolarTemp: -3,
+        peakSeasonPolarTemp: 18,
+        offSeasonTropicsTemp: 25.5,
+        peakSeasonTropicsTemp: 29.5
     }
 };
 ENV_DEFS[SIM_MODE_EXPERIMENTAL].SST = {
@@ -1182,8 +1186,12 @@ STORM_ALGORITHM.defaults.core = function(sys,u){
     sys.organization = constrain(sys.organization,0,100);
     sys.organization /= 100;
 
-    let targetPressure = 1010-25*log((lnd||SST<25)?1:map(SST,25,30,1,2))/log(1.17);
-    targetPressure = lerp(1010,targetPressure,pow(sys.organization,3));
+    const heat = constrain(map(SST, 25, 30.5, 0, 1), 0, 1);
+    const minimumPotentialPressure =
+        sys.basin.actMode === SIM_MODE_HYPER ? 870 :
+        sys.basin.actMode === SIM_MODE_MEGABLOBS ? 895 : 905;
+    const potentialPressure = lerp(1010, minimumPotentialPressure, pow(heat, 1.4));
+    let targetPressure = lnd ? 1010 : lerp(1010, potentialPressure, pow(sys.organization, 3));
     sys.pressure = lerp(sys.pressure,targetPressure,(sys.pressure>targetPressure?0.05:0.08)*tropicalness);
     sys.pressure -= random(-3,3.5)*nontropicalness;
     if(sys.organization<0.3) sys.pressure += random(-2,2.5)*tropicalness;
@@ -1247,7 +1255,7 @@ STORM_ALGORITHM.defaults.core = function(sys,u){
         sys.genesisProgress = 1;
     }
 
-    if(sys.type === TROPWAVE && !canTropicalCycloneForm(sys)){
+    if(sys.type === TROPWAVE && sys.genesisProgress < 1 && !canTropicalCycloneForm(sys)){
         const minPressure = map(
             sys.genesisProgress,
             0, 1,
@@ -1293,7 +1301,8 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].core = function(sys,u){
         sys.organization = lerp(sys.organization,0,0.03);
     sys.organization = constrain(sys.organization,0,1);
 
-    let hardCeiling = map(SST,21,31,1015,880);
+    const heat = constrain(map(SST,21,31,0,1), 0, 1);
+    let hardCeiling = lerp(1015,880,heat);
     if(lnd)
         hardCeiling = 990;
     let softCeiling = map(sys.organization,0.93,0.98,lerp(1020,hardCeiling,0.7),hardCeiling,true);
@@ -1355,7 +1364,7 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].core = function(sys,u){
         sys.genesisProgress = 1;
     }
 
-    if(sys.type === TROPWAVE && !canTropicalCycloneForm(sys)){
+    if(sys.type === TROPWAVE && sys.genesisProgress < 1 && !canTropicalCycloneForm(sys)){
         const minPressure = map(
             sys.genesisProgress,
             0, 1,
@@ -1419,6 +1428,25 @@ function canTropicalCycloneForm(sys){
         (sys.lowerWarmCore || 0) >= 0.55;
 }
 
+function enforceStormStateConsistency(sys){
+    if(sys.type === TROPWAVE && (sys.genesisProgress || 0) < 1 && !canTropicalCycloneForm(sys)){
+        const minPressure = map(
+            sys.genesisProgress || 0,
+            0, 1,
+            1008, 1000
+        );
+
+        const maxWind = map(
+            sys.genesisProgress || 0,
+            0, 1,
+            24, 33
+        );
+
+        sys.pressure = max(sys.pressure, minPressure);
+        sys.windSpeed = min(sys.windSpeed, maxWind);
+    }
+}
+
 STORM_ALGORITHM.defaults.typeDetermination = function(sys,u){
     if(sys.genesisProgress === undefined)
         sys.genesisProgress = (sys.type === TROP || sys.type === SUBTROP) ? 1 : 0;
@@ -1452,6 +1480,8 @@ STORM_ALGORITHM.defaults.typeDetermination = function(sys,u){
             else
                 sys.type = TROP;
     }
+
+    enforceStormStateConsistency(sys);
 };
 
 // -- Version -- //

@@ -208,106 +208,108 @@ function random(minOrMax?: any, maxVal?: number): any {
   return minOrMax + seededRandom() * (maxVal - minOrMax);
 }
 
-// Perlin Noise (Improved Noise algorithm)
-class ImprovedNoise {
-  private p: Int32Array;
+// Official p5.js v1.9.1 Perlin Noise implementation
+const PERLIN_YWRAPB = 4;
+const PERLIN_YWRAP = 1 << PERLIN_YWRAPB;
+const PERLIN_ZWRAPB = 8;
+const PERLIN_ZWRAP = 1 << PERLIN_ZWRAPB;
+const PERLIN_SIZE = 4095;
 
-  constructor(seed = Math.random()) {
-    this.p = new Int32Array(512);
-    const permutation = new Uint8Array(256);
-    for (let i = 0; i < 256; i++) {
-      permutation[i] = i;
-    }
-    let s = seed;
-    const lcgRandom = () => {
-      const x = Math.sin(s++) * 10000;
-      return x - Math.floor(x);
-    };
-    for (let i = 255; i > 0; i--) {
-      const j = Math.floor(lcgRandom() * (i + 1));
-      const tmp = permutation[i];
-      permutation[i] = permutation[j];
-      permutation[j] = tmp;
-    }
-    for (let i = 0; i < 256; i++) {
-      this.p[i] = permutation[i];
-      this.p[256 + i] = permutation[i];
-    }
-  }
+let perlin_octaves = 4;
+let perlin_amp_falloff = 0.5;
 
-  private fade(t: number) {
-    return t * t * t * (t * (t * 6 - 15) + 10);
-  }
+const scaled_cosine = (i: number) => 0.5 * (1.0 - Math.cos(i * Math.PI));
 
-  private lerp(t: number, a: number, b: number) {
-    return a + t * (b - a);
-  }
-
-  private grad(hash: number, x: number, y: number, z: number) {
-    const h = hash & 15;
-    const u = h < 8 ? x : y;
-    const v = h < 4 ? y : h === 12 || h === 14 ? x : z;
-    return ((h & 1) === 0 ? u : -u) + ((h & 2) === 0 ? v : -v);
-  }
-
-  noise(x: number, y: number, z: number) {
-    const X = Math.floor(x) & 255;
-    const Y = Math.floor(y) & 255;
-    const Z = Math.floor(z) & 255;
-
-    x -= Math.floor(x);
-    y -= Math.floor(y);
-    z -= Math.floor(z);
-
-    const u = this.fade(x);
-    const v = this.fade(y);
-    const w = this.fade(z);
-
-    const A = this.p[X] + Y;
-    const AA = this.p[A] + Z;
-    const AB = this.p[A + 1] + Z;
-    const B = this.p[X + 1] + Y;
-    const BA = this.p[B] + Z;
-    const BB = this.p[B + 1] + Z;
-
-    return this.lerp(w, this.lerp(v, this.lerp(u, this.grad(this.p[AA], x, y, z),
-                                                  this.grad(this.p[BA], x - 1, y, z)),
-                                      this.lerp(u, this.grad(this.p[AB], x, y - 1, z),
-                                                  this.grad(this.p[BB], x - 1, y - 1, z))),
-                        this.lerp(v, this.lerp(u, this.grad(this.p[AA + 1], x, y, z - 1),
-                                                  this.grad(this.p[BA + 1], x - 1, y, z - 1)),
-                                      this.lerp(u, this.grad(this.p[AB + 1], x, y - 1, z - 1),
-                                                  this.grad(this.p[BB + 1], x - 1, y - 1, z - 1))));
-  }
-}
-
-let noiseLod = 4;
-let noiseFalloff = 0.5;
-let activeNoiseGenerator = new ImprovedNoise();
+let perlin: number[] | null = null;
 
 function noise(x: number, y = 0, z = 0): number {
-  let total = 0;
-  let frequency = 1;
-  let amplitude = 1;
-  let maxValue = 0;
-  for (let i = 0; i < noiseLod; i++) {
-    const raw = activeNoiseGenerator.noise(x * frequency, y * frequency, z * frequency);
-    const val = raw * 0.5 + 0.5; // map standard noise [-1, 1] to [0, 1]
-    total += val * amplitude;
-    maxValue += amplitude;
-    amplitude *= noiseFalloff;
-    frequency *= 2;
+  if (perlin === null) {
+    perlin = new Array(PERLIN_SIZE + 1);
+    for (let i = 0; i < PERLIN_SIZE + 1; i++) {
+      perlin[i] = seededRandom();
+    }
   }
-  return total / maxValue;
+
+  if (x < 0) x = -x;
+  if (y < 0) y = -y;
+  if (z < 0) z = -z;
+
+  let xi = Math.floor(x),
+    yi = Math.floor(y),
+    zi = Math.floor(z);
+  let xf = x - xi;
+  let yf = y - yi;
+  let zf = z - zi;
+  let rxf: number, ryf: number;
+
+  let r = 0;
+  let ampl = 0.5;
+
+  let n1: number, n2: number, n3: number;
+
+  for (let o = 0; o < perlin_octaves; o++) {
+    let of = xi + (yi << PERLIN_YWRAPB) + (zi << PERLIN_ZWRAPB);
+
+    rxf = scaled_cosine(xf);
+    ryf = scaled_cosine(yf);
+
+    n1 = perlin[of & PERLIN_SIZE];
+    n1 += rxf * (perlin[(of + 1) & PERLIN_SIZE] - n1);
+    n2 = perlin[(of + PERLIN_YWRAP) & PERLIN_SIZE];
+    n2 += rxf * (perlin[(of + PERLIN_YWRAP + 1) & PERLIN_SIZE] - n2);
+    n1 += ryf * (n2 - n1);
+
+    of += PERLIN_ZWRAP;
+    n2 = perlin[of & PERLIN_SIZE];
+    n2 += rxf * (perlin[(of + 1) & PERLIN_SIZE] - n2);
+    n3 = perlin[(of + PERLIN_YWRAP) & PERLIN_SIZE];
+    n3 += rxf * (perlin[(of + PERLIN_YWRAP + 1) & PERLIN_SIZE] - n3);
+    n2 += ryf * (n3 - n2);
+
+    n1 += scaled_cosine(zf) * (n2 - n1);
+
+    r += n1 * ampl;
+    ampl *= perlin_amp_falloff;
+    x *= 2;
+    xi = Math.floor(x);
+    xf = x - xi;
+    y *= 2;
+    yi = Math.floor(y);
+    yf = y - yi;
+    z *= 2;
+    zi = Math.floor(z);
+    zf = z - zi;
+  }
+  return r;
 }
 
-function noiseDetail(lod: number, falloff: number) {
-  noiseLod = lod;
-  if (falloff !== undefined) noiseFalloff = falloff;
+function noiseDetail(lod: number, falloff?: number) {
+  if (lod > 0) {
+    perlin_octaves = lod;
+  }
+  if (falloff !== undefined && falloff > 0) {
+    perlin_amp_falloff = falloff;
+  }
 }
 
 function noiseSeed(seed: number) {
-  activeNoiseGenerator = new ImprovedNoise(seed);
+  // Linear Congruential Generator
+  // Set to values from Numerical Recipes
+  const lcg = (() => {
+    let m = 4294967296;
+    let a = 1664525;
+    let c = 1013904223;
+    let z = seed;
+    return () => {
+      z = (a * z + c) % m;
+      return z / m;
+    };
+  })();
+
+  perlin = new Array(PERLIN_SIZE + 1);
+  for (let i = 0; i < PERLIN_SIZE + 1; i++) {
+    perlin[i] = lcg();
+  }
 }
 
 // Color representation
@@ -1134,7 +1136,7 @@ class p5_Vector {
   }
 
   static random2D() {
-    const angle = Math.random() * Math.PI * 2;
+    const angle = seededRandom() * Math.PI * 2;
     return new p5_Vector(Math.cos(angle), Math.sin(angle));
   }
 }
@@ -1351,8 +1353,8 @@ const loop = () => { isLooping = true; };
 
 function randomGaussian(mean = 0, sd = 1): number {
   let u = 0, v = 0;
-  while (u === 0) u = Math.random();
-  while (v === 0) v = Math.random();
+  while (u === 0) u = seededRandom();
+  while (v === 0) v = seededRandom();
   const num = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
   return num * sd + mean;
 }
