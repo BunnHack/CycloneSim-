@@ -241,7 +241,8 @@ class Storm{
                 }
             };
             stormIcons.push();
-            stormIcons.translate(pos.x,pos.y);
+            let sScale = (typeof scaler !== "undefined" && scaler > 0) ? scaler : 1;
+            stormIcons.translate(round(pos.x * sScale) / sScale, round(pos.y * sScale) / sScale);
             stormIcons.textAlign(CENTER,CENTER);
             if(selectedStorm===this){
                 stormIcons.noFill();

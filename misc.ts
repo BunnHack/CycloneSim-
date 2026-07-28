@@ -28,11 +28,11 @@ function createBuffer(w,h,alwaysFull,noScale){
 function rescaleCanvases(s){
     for(let [buffer, metadata] of buffers){
         if(!metadata.alwaysFull){
-            buffer.resizeCanvas(floor(metadata.baseWidth*s),floor(metadata.baseHeight*s));
+            buffer.resizeCanvas(round(metadata.baseWidth*s),round(metadata.baseHeight*s));
             if(!metadata.noScale) buffer.scale(s);
         }
     }
-    resizeCanvas(floor(WIDTH*s),floor(HEIGHT*s));
+    resizeCanvas(round(WIDTH*s),round(HEIGHT*s));
 }
 
 function toggleFullscreen(){

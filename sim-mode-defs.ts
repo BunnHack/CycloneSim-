@@ -56,8 +56,16 @@ SPAWN_RULES[SIM_MODE_SPOOKY] = {};
 
 SPAWN_RULES.defaults.archetypes = {
     'tw': {
-        x: ()=>random(0,WIDTH-1),
-        y: (b)=>b.hemY(random(HEIGHT*0.7,HEIGHT*0.9)),
+        x: (b) => {
+            let loc = sampleTwLocation(b);
+            b._tempTwY = loc.y;
+            return loc.x;
+        },
+        y: (b, x) => {
+            let y = b._tempTwY !== undefined ? b._tempTwY : b.hemY(random(HEIGHT * 0.7, HEIGHT * 0.9));
+            delete b._tempTwY;
+            return y;
+        },
         pressure: [1000, 1020],
         windSpeed: [15, 35],
         type: TROPWAVE,
@@ -95,7 +103,8 @@ SPAWN_RULES.defaults.archetypes = {
         organization: 1,
         lowerWarmCore: 1,
         upperWarmCore: 1,
-        depth: 0
+        depth: 0,
+        genesisProgress: 1
     },
     'stc': {
         inherit: 'tc',
@@ -291,6 +300,41 @@ function southChinaSeaSeasonFactor(tick) {
     return 0.05;
 }
 
+function sampleTwLocation(b) {
+    let bestX = random(0, WIDTH - 1);
+    let bestY = b.hemY(random(HEIGHT * 0.65, HEIGHT * 0.9));
+    let maxScore = -1;
+
+    for (let i = 0; i < 25; i++) {
+        let rx = random(0, WIDTH - 1);
+        let ry = b.hemY(random(HEIGHT * 0.65, HEIGHT * 0.9));
+        let coord = Coordinate.convertFromXY(b.mapType, rx, ry);
+
+        if (land && land.get(coord) > 0.5) continue;
+
+        let sub = land ? land.getSubBasin(coord) : 0;
+        if (!b.subInBasin(sub)) continue;
+
+        if (b.mapType === 8 && !b.SHem) {
+            if (coord.longitude < 100 || coord.longitude > 180) continue;
+            if (coord.latitude < 3 || coord.latitude > 28) continue;
+        }
+
+        let pot = 0.5;
+        try {
+            pot = genesisPotential(b, rx, ry);
+        } catch(e) {}
+
+        let score = pot + random(0, 0.4);
+        if (score > maxScore) {
+            maxScore = score;
+            bestX = rx;
+            bestY = ry;
+        }
+    }
+    return { x: bestX, y: bestY };
+}
+
 function trySpawnSouthChinaSeaDisturbance(basin){
     if(basin.mapType !== 8 || basin.SHem)
         return;
@@ -369,8 +413,16 @@ SPAWN_RULES[SIM_MODE_HYPER].doSpawn = function(b){
 
 SPAWN_RULES[SIM_MODE_WILD].archetypes = {
     'tw': {
-        x: ()=>random(0,WIDTH-1),
-        y: (b)=>b.hemY(random(HEIGHT*0.2,HEIGHT*0.9)),
+        x: (b) => {
+            let loc = sampleTwLocation(b);
+            b._tempTwY = loc.y;
+            return loc.x;
+        },
+        y: (b, x) => {
+            let y = b._tempTwY !== undefined ? b._tempTwY : b.hemY(random(HEIGHT * 0.2, HEIGHT * 0.9));
+            delete b._tempTwY;
+            return y;
+        },
         pressure: [1000, 1020],
         windSpeed: [15, 35],
         type: TROPWAVE,
@@ -400,8 +452,16 @@ SPAWN_RULES[SIM_MODE_MEGABLOBS].doSpawn = function(b){
 
 SPAWN_RULES[SIM_MODE_EXPERIMENTAL].archetypes = {
     'tw': {
-        x: ()=>random(0,WIDTH-1),
-        y: (b)=>b.hemY(random(HEIGHT*0.7,HEIGHT*0.9)),
+        x: (b) => {
+            let loc = sampleTwLocation(b);
+            b._tempTwY = loc.y;
+            return loc.x;
+        },
+        y: (b, x) => {
+            let y = b._tempTwY !== undefined ? b._tempTwY : b.hemY(random(HEIGHT * 0.7, HEIGHT * 0.9));
+            delete b._tempTwY;
+            return y;
+        },
         pressure: [1000, 1020],
         windSpeed: [15, 35],
         type: TROPWAVE,
@@ -431,7 +491,8 @@ SPAWN_RULES[SIM_MODE_EXPERIMENTAL].archetypes = {
         lowerWarmCore: 1,
         upperWarmCore: 1,
         depth: 0,
-        kaboom: 0.2
+        kaboom: 0.2,
+        genesisProgress: 1
     },
     'l': {
         inherit: 'tw',
@@ -1137,27 +1198,34 @@ STORM_ALGORITHM.defaults.core = function(sys,u){
 
     if(sys.type === TROPWAVE || sys.type === EXTROP || sys.genesisProgress < 1){
         const g = genesisPotential(sys.basin, sys.pos.x, sys.pos.y);
-        if(g > 0.48){
-            sys.genesisProgress += (g - 0.48) / 14;
-        }else{
-            sys.genesisProgress -= (0.48 - g) / 8;
-        }
+        let rate;
+        if(g >= 0.65)
+            rate = 0.025;
+        else if(g >= 0.55)
+            rate = 0.015;
+        else if(g >= 0.48)
+            rate = 0.007;
+        else if(g < 0.35)
+            rate = -0.012;
+        else
+            rate = -0.003;
 
-        const strongPreGenesis =
-            g >= 0.52 &&
-            sys.windSpeed >= 30 &&
+        if(
             sys.organization >= 0.50 &&
-            sys.lowerWarmCore >= 0.58;
-
-        if(strongPreGenesis){
-            sys.genesisProgress = max(sys.genesisProgress, 0.85);
+            sys.windSpeed >= 30 &&
+            sys.lowerWarmCore >= 0.58
+        ){
+            rate += 0.008;
         }
+
+        sys.genesisProgress += rate;
 
         const decisiveGenesis =
-            g >= 0.55 &&
-            sys.genesisProgress >= 0.82 &&
-            sys.pressure < 998 &&
-            sys.windSpeed >= 34;
+            canTropicalCycloneForm(sys) ||
+            (g >= 0.55 &&
+             sys.genesisProgress >= 0.82 &&
+             sys.pressure < 998 &&
+             sys.windSpeed >= 34);
 
         if(decisiveGenesis)
             sys.genesisProgress = 1;
@@ -1238,27 +1306,34 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].core = function(sys,u){
 
     if(sys.type === TROPWAVE || sys.type === EXTROP || sys.genesisProgress < 1){
         const g = genesisPotential(sys.basin, sys.pos.x, sys.pos.y);
-        if(g > 0.48){
-            sys.genesisProgress += (g - 0.48) / 14;
-        }else{
-            sys.genesisProgress -= (0.48 - g) / 8;
-        }
+        let rate;
+        if(g >= 0.65)
+            rate = 0.025;
+        else if(g >= 0.55)
+            rate = 0.015;
+        else if(g >= 0.48)
+            rate = 0.007;
+        else if(g < 0.35)
+            rate = -0.012;
+        else
+            rate = -0.003;
 
-        const strongPreGenesis =
-            g >= 0.52 &&
-            sys.windSpeed >= 30 &&
+        if(
             sys.organization >= 0.50 &&
-            sys.lowerWarmCore >= 0.58;
-
-        if(strongPreGenesis){
-            sys.genesisProgress = max(sys.genesisProgress, 0.85);
+            sys.windSpeed >= 30 &&
+            sys.lowerWarmCore >= 0.58
+        ){
+            rate += 0.008;
         }
+
+        sys.genesisProgress += rate;
 
         const decisiveGenesis =
-            g >= 0.55 &&
-            sys.genesisProgress >= 0.82 &&
-            sys.pressure < 998 &&
-            sys.windSpeed >= 34;
+            canTropicalCycloneForm(sys) ||
+            (g >= 0.55 &&
+             sys.genesisProgress >= 0.82 &&
+             sys.pressure < 998 &&
+             sys.windSpeed >= 34);
 
         if(decisiveGenesis)
             sys.genesisProgress = 1;
