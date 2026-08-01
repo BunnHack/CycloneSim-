@@ -20,7 +20,10 @@ ACTIVE_ATTRIBS.defaults = [
     'lowerWarmCore',
     'upperWarmCore',
     'depth',
-    'genesisProgress'
+    'genesisProgress',
+    'riActive',
+    'riTimer',
+    'riCooldown'
 ];
 
 ACTIVE_ATTRIBS[SIM_MODE_EXPERIMENTAL] = [
@@ -29,7 +32,10 @@ ACTIVE_ATTRIBS[SIM_MODE_EXPERIMENTAL] = [
     'upperWarmCore',
     'depth',
     'genesisProgress',
-    'kaboom'
+    'kaboom',
+    'riActive',
+    'riTimer',
+    'riCooldown'
 ];
 
 // ---- Season Curve ---- //
@@ -197,6 +203,35 @@ SPAWN_RULES.defaults.archetypes = {
     }
 };
 
+function monsoonTroughDynamics(basin, x, y, t){
+    const coord = Coordinate.convertFromXY(basin.mapType, x, y);
+    const s = seasonCurve(t);   // -1(冬) ~ +1(夏)
+
+    // 槽軸緯度:冬季約 5°,盛夏約 15°(北半球為正,南半球鏡像)
+    const axisLat = map(s, -1, 1, 5, 15) * (basin.SHem ? -1 : 1);
+
+    // 季風槽主要在夏半年存在
+    const seasonGate = map(s, -0.3, 0.5, 0, 1, true);
+    if(seasonGate === 0) return {vorticity: 0, convergence: 0};
+
+    // 緯向結構:槽在地圖西半部(季風區)較強, 聖嬰年可擴展到東側
+    const oni = basin && basin.enso ? basin.enso.display : 0;
+    const eastExtent = map(oni, -2, 2, 0.55, 0.85, true);
+    const longFactor = map(x, 0, WIDTH * eastExtent, 1.1, 0.7, true);
+
+    // 距槽軸的高斯包絡,半寬約 3.5°
+    const sigma = 3.5;
+    const envelope = Math.exp(-sq((coord.latitude - axisLat) / sigma));
+
+    // 強度基準:lowLevelDynamics 裡 0.02 即為滿分,這裡最多貢獻約 60%
+    const strength = 0.012 * seasonGate * longFactor * envelope;
+
+    return {
+        vorticity: strength,            // 氣旋式渦度在軸上最大
+        convergence: strength * 0.8     // 輻合略弱於渦度
+    };
+}
+
 function lowLevelDynamics(basin, x, y, t){
     const d = 10;
     const sx = constrain(x, d, WIDTH - 1 - d);
@@ -218,10 +253,25 @@ function lowLevelDynamics(basin, x, y, t){
 
     const cyclonicVorticity = basin.SHem ? -vorticity_nh : vorticity_nh;
 
+    const trough = monsoonTroughDynamics(basin, x, y, t);
+
     return {
-        vorticity: cyclonicVorticity,
-        convergence: convergence
+        vorticity: cyclonicVorticity + trough.vorticity,
+        convergence: convergence + trough.convergence
     };
+}
+
+function coastalFactor(basin, coord, radiusDeg = 1){
+    if(!land) return 1;
+    const step = radiusDeg / 2;
+    let maxLand = 0;
+    for(let dlon = -radiusDeg; dlon <= radiusDeg; dlon += step){
+        for(let dlat = -radiusDeg; dlat <= radiusDeg; dlat += step){
+            const v = land.get(coord.longitude + dlon, coord.latitude + dlat);
+            if(v > maxLand) maxLand = v;
+        }
+    }
+    return constrain(1 - maxLand * 1.2, 0, 1);
 }
 
 function genesisPotential(basin, x, y){
@@ -240,7 +290,8 @@ function genesisPotential(basin, x, y){
     const shearVec = basin.env.get("shear", x, y, t);
     const shear = shearVec ? shearVec.mag() : 0;
 
-    const sstFactor = constrain(map(sst, 24.5, 29, 0, 1), 0, 1);
+    const sstCap = basin.actMode === SIM_MODE_HYPER ? 31 : 29;
+    const sstFactor = constrain(map(sst, 24.5, sstCap, 0, 1), 0, 1);
     if(sstFactor === 0) return 0;
 
     const moistureFactor = constrain(map(moisture, 0.4, 0.68, 0, 1), 0, 1);
@@ -272,7 +323,32 @@ function genesisPotential(basin, x, y){
     const prod = thermoFactors.reduce((a, v) => a * v, 1);
     const thermoPotential = Math.pow(prod, 1 / thermoFactors.length);
 
-    return thermoPotential * dynamicsFactor;
+    // MJO 調製:增強相位最多 +55%,抑制相位最多 -55%
+    let mjoFactor = 1;
+    try {
+        const mjo = basin.env.get("MJO", x, y, t);
+        if(mjo !== null && mjo !== undefined)
+            mjoFactor = map(mjo, -1, 1, 0.45, 1.55, true);
+    } catch(e) {}
+
+    // ENSO 調製:
+    let ensoFactor = 1;
+    if(basin && basin.enso){
+        const oni = basin.enso.display;
+        if(basin.mapType === 6){
+            // 大西洋:聖嬰增加風切 → 抑制;反聖嬰 → 增強
+            ensoFactor = map(oni, -2.5, 2.5, 1.35, 0.6, true);
+        }else{
+            // 太平洋型:聖嬰讓生成區東移(東側加分、西側減分),
+            // 反聖嬰則生成區西移(南海、菲律賓東側活躍)
+            const eastness = map(x, 0, WIDTH, -1, 1);
+            ensoFactor = 1 + oni * 0.3 * eastness;
+            // 強事件年整體略為活躍(聖嬰年 WPac 強颱比例高)
+            ensoFactor *= map(abs(oni), 1, 2.5, 1, 1.15, true);
+        }
+    }
+
+    return thermoPotential * dynamicsFactor * coastalFactor(basin, coord, 1) * mjoFactor * ensoFactor;
 }
 
 function southChinaSeaSeasonFactor(tick) {
@@ -318,7 +394,7 @@ function sampleTwLocation(b) {
         if (!b.subInBasin(sub)) continue;
 
         if (b.mapType === 8 && !b.SHem) {
-            if (coord.longitude < 100 || coord.longitude > 180) continue;
+            if (coord.longitude < 105 || coord.longitude > 180) continue;
             if (coord.latitude < 3 || coord.latitude > 28) continue;
         }
 
@@ -395,8 +471,14 @@ function trySpawnSouthChinaSeaDisturbance(basin){
 }
 
 SPAWN_RULES.defaults.doSpawn = function(b){
+    let mjoGate = 1;
+    try {
+        const mjoMid = b.env.get('MJO', WIDTH/2, b.hemY(HEIGHT*0.8), b.tick);
+        if(mjoMid !== null && mjoMid !== undefined) mjoGate = map(mjoMid, -1, 1, 0.6, 1.5, true);
+    } catch(e) {}
+
     // tropical waves
-    if(random()<0.015*sq((seasonCurve(b.tick)+1)/2)) spawnSampledTropicalWave(b);
+    if(random()<(0.015*sq((seasonCurve(b.tick)+1)/2)+0.002) * mjoGate) spawnSampledTropicalWave(b);
 
     // extratropical cyclones
     if(random()<0.01-0.002*seasonCurve(b.tick)) b.spawnArchetype('ex');
@@ -412,7 +494,13 @@ SPAWN_RULES[SIM_MODE_NORMAL].doSpawn = SPAWN_RULES.defaults.doSpawn;
 // -- Hyper Mode -- //
 
 SPAWN_RULES[SIM_MODE_HYPER].doSpawn = function(b){
-    if(random()<(0.013*sq((seasonCurve(b.tick)+1)/2)+0.002)) spawnSampledTropicalWave(b);
+    let mjoGate = 1;
+    try {
+        const mjoMid = b.env.get('MJO', WIDTH/2, b.hemY(HEIGHT*0.8), b.tick);
+        if(mjoMid !== null && mjoMid !== undefined) mjoGate = map(mjoMid, -1, 1, 0.6, 1.5, true);
+    } catch(e) {}
+
+    if(random()<(0.02*sq((seasonCurve(b.tick)+1)/2)+0.004) * mjoGate) spawnSampledTropicalWave(b);
 
     if(random()<0.01-0.002*seasonCurve(b.tick)) b.spawnArchetype('ex');
 
@@ -957,6 +1045,139 @@ ENV_DEFS[SIM_MODE_MEGABLOBS].SSTAnomaly = {
 ENV_DEFS[SIM_MODE_EXPERIMENTAL].SSTAnomaly = {};
 ENV_DEFS[SIM_MODE_SPOOKY].SSTAnomaly = {};
 
+class ENSOTracker{
+    basin: any;
+    nino34: number;
+    prevNino34: number;
+    oni: number;
+    display: number;
+    history: number[];
+    lastUpdateMonth: number;
+
+    constructor(basin, data?){
+        this.basin = basin;
+        this.nino34 = 0;            // 當月 Niño3.4 指數(原始月值)
+        this.prevNino34 = 0;        // 上個月的值(用來月內平滑插值)
+        this.oni = 0;               // 3 個月滑動平均,即正式 ONI
+        this.display = 0;           // 平滑插值後、實際作用於環境的值
+        this.history = [];          // 逐月 nino34 歷史(持久保存,供曲線圖用)
+        this.lastUpdateMonth = -1;
+        if(data instanceof LoadData) this.load(data);
+    }
+
+    // 每 tick 呼叫
+    update(){
+        if(!this.basin) return;
+        const m = this.basin.tickMoment();
+        if(!m) return;
+        const monthIndex = m.year() * 12 + m.month();
+
+        if(monthIndex !== this.lastUpdateMonth){
+            if(this.lastUpdateMonth >= 0)
+                this.stepMonth(m.month());
+            this.lastUpdateMonth = monthIndex;
+            this.prevNino34 = this.nino34;
+        }
+
+        // 月內平滑插值:SST 等環境效應不會在月初瞬間跳變
+        const frac = (m.date() - 1 + m.hour()/24) / m.daysInMonth();
+        this.display = lerp(this.prevNino34, this.nino34, frac);
+    }
+
+    // 每月推進一次的核心狀態機
+    stepMonth(month){   // month: 0-11(日曆月,ENSO 生命週期綁定北半球日曆)
+        const prev = this.nino34;
+        const inEvent = Math.abs(prev) >= 0.5;
+        let target, rate, sigma;
+
+        if(month >= 2 && month <= 4){
+            // 3–5 月:春季屏障。事件被拉向 0,噪聲放大——
+            // 大部分事件在這裡瓦解,少數直接翻轉符號(2026 式快速切換)
+            target = 0;
+            rate = 0.2;
+            sigma = 0.35;
+        }else if(month >= 5 && month <= 10){
+            // 6–11 月:發展季。已在事件中的話被拉向 ±1.6 的吸引子並鞏固
+            target = inEvent ? Math.sign(prev) * 1.6 : 0;
+            rate = inEvent ? 0.3 : 0.06;
+            sigma = 0.2;
+        }else{
+            // 12–2 月:峰值鎖定期。事件維持在 ±1.5 附近,變化緩慢
+            target = inEvent ? Math.sign(prev) * 1.5 : 0;
+            rate = 0.15;
+            sigma = 0.1;
+        }
+
+        let nino = prev + (target - prev) * rate + randomGaussian(0, sigma);
+        nino = constrain(nino, -2.8, 2.8);
+        this.nino34 = nino;
+
+        this.history.push(nino);
+        if(this.history.length > 1200) this.history.shift();   // 保留最近 100 年
+
+        const last3 = this.history.slice(-3);
+        this.oni = last3.reduce((a,b)=>a+b, 0) / last3.length;
+    }
+
+    phase(){
+        const v = this.oni;
+        if(v >= 2.0)  return {name: 'Super El Niño',    sign: 1};
+        if(v >= 1.5)  return {name: 'Strong El Niño',   sign: 1};
+        if(v >= 1.0)  return {name: 'Moderate El Niño', sign: 1};
+        if(v >= 0.5)  return {name: 'Weak El Niño',     sign: 1};
+        if(v <= -2.0) return {name: 'Very Strong La Niña', sign: -1};
+        if(v <= -1.5) return {name: 'Strong La Niña',   sign: -1};
+        if(v <= -1.0) return {name: 'Moderate La Niña', sign: -1};
+        if(v <= -0.5) return {name: 'Weak La Niña',     sign: -1};
+        return {name: 'Neutral', sign: 0};
+    }
+
+    // 簡單的「官方預報」:依當前吸引子外推三個月
+    forecast(){
+        const prev = this.nino34;
+        const inEvent = Math.abs(prev) >= 0.5;
+        const month = this.basin.tickMoment().month();
+        let target;
+        if(month >= 2 && month <= 4) target = 0;
+        else if(inEvent) target = Math.sign(prev) * 1.5;
+        else target = 0;
+        return constrain(prev + (target - prev) * 0.6, -2.8, 2.8);
+    }
+
+    save(){
+        return {
+            nino34: this.nino34,
+            prevNino34: this.prevNino34,
+            oni: this.oni,
+            history: this.history,
+            lastUpdateMonth: this.lastUpdateMonth
+        };
+    }
+
+    load(data){
+        if(data instanceof LoadData && data.value){
+            const o = data.value;
+            this.nino34 = o.nino34 || 0;
+            this.prevNino34 = o.prevNino34 !== undefined ? o.prevNino34 : this.nino34;
+            this.oni = o.oni || 0;
+            this.display = this.nino34;
+            this.lastUpdateMonth = o.lastUpdateMonth !== undefined ? o.lastUpdateMonth : -1;
+            if(o.history instanceof Array) this.history = o.history;
+        }
+    }
+}
+
+function ensoSSTEffect(basin, x, y){
+    const oni = basin && basin.enso ? basin.enso.display : 0;
+    if(!oni) return 0;
+    const coord = Coordinate.convertFromXY(basin.mapType, x, y);
+    // 訊號集中在熱帶(10°–30° 衰減到 0)
+    const latW = constrain(map(abs(coord.latitude), 30, 10, 0, 1), 0, 1);
+    // 東西偶極:東側 +1.0,西側 −0.4(真實聖嬰西太平洋冷訊號較弱)
+    const dipole = map(x, WIDTH*0.15, WIDTH*0.9, -0.4, 1.0, true);
+    return oni * 0.9 * dipole * latW;   // ONI=+2 時東側 +1.8°C,西側 −0.7°C
+}
+
 // -- SST -- //
 
 ENV_DEFS.defaults.SST = {
@@ -976,7 +1197,7 @@ ENV_DEFS.defaults.SST = {
         let ostt = u.modifiers.offSeasonTropicsTemp;
         let pstt = u.modifiers.peakSeasonTropicsTemp;
         let t = lerp(map(s,-1,1,ospt,pspt),map(s,-1,1,ostt,pstt),h);
-        return t+anom;
+        return t+anom+ensoSSTEffect(u.basin, x, y);
     },
     displayFormat: v=>{
         let str = '';
@@ -1012,7 +1233,7 @@ ENV_DEFS[SIM_MODE_NORMAL].SST = {
     modifiers: {
         offSeasonPolarTemp: -3,
         peakSeasonPolarTemp: 10,
-        offSeasonTropicsTemp: 27,
+        offSeasonTropicsTemp: 27.5,
         peakSeasonTropicsTemp: 30.5
     }
 };
@@ -1030,7 +1251,7 @@ ENV_DEFS[SIM_MODE_WILD].SST = {
         let anom = u.field('SSTAnomaly');
         let s = u.yearfrac(z);
         let t = u.piecewise(s,[[0,22],[2,25.5],[4,25],[5,26.5],[6,27],[6.25,30],[6.75,31],[7,28],[9,27],[10,26],[11,23]]);
-        return t+anom;
+        return t+anom+ensoSSTEffect(u.basin, x, y);
     }
 };
 ENV_DEFS[SIM_MODE_MEGABLOBS].SST = {
@@ -1065,8 +1286,13 @@ ENV_DEFS.defaults.moisture = {
         let tm = u.modifiers.tropicalMoisture;
         let mm = u.modifiers.mountainMoisture;
         let m = map(l,0.5,0.7,map(y,0,HEIGHT,pm,tm),mm,true);
-        m += map(s,-1,1,-0.08,0.08);
+        m += map(s,-1,1,-0.05,0.08);
         m += map(v,0,1,-0.3,0.3);
+        try {
+            const mjoVal = u.field('MJO');
+            if(mjoVal !== null && mjoVal !== undefined)
+                m += map(mjoVal, -1, 1, -0.05, 0.07);
+        } catch(e) {}
         m = constrain(m,0,1);
         return m;
     },
@@ -1116,6 +1342,76 @@ ENV_DEFS[SIM_MODE_WILD].moisture = {
 ENV_DEFS[SIM_MODE_MEGABLOBS].moisture = {};
 ENV_DEFS[SIM_MODE_EXPERIMENTAL].moisture = {};
 ENV_DEFS[SIM_MODE_SPOOKY].moisture = {};
+
+// -- MJO -- //
+
+ENV_DEFS.defaults.MJO = {
+    displayName: 'Madden-Julian Oscillation',
+    version: 0,
+    mapFunc: (u,x,y,z)=>{
+        // 一個繞地圖一週、約 45 天向東傳播的波
+        const period = 45 * 24;              // 週期(ticks)
+        const phase = TAU * (x/WIDTH - z/period);
+        // 振幅用慢變 noise 調製,讓 MJO 有強有弱、有時消失(真實 MJO 並非全年規則)
+        const amp = map(u.noise(0, x, y, z), 0, 1, 0.15, 1);
+        // MJO 對流耦合主要在熱帶,向高緯衰減
+        const latWeight = constrain(map(abs(u.coord.latitude), 25, 8, 0, 1), 0, 1);
+        return Math.sin(phase) * amp * latWeight;   // -1(抑制) ~ +1(增強)
+    },
+    displayFormat: v=>{
+        if(v > 0.3) return 'Enhanced (' + (round(v*100)/100) + ')';
+        if(v < -0.3) return 'Suppressed (' + (round(v*100)/100) + ')';
+        return 'Neutral (' + (round(v*100)/100) + ')';
+    },
+    hueMap: (v)=>{
+        colorMode(HSB);
+        let c;
+        if(v > 0)
+            c = lerpColor(color(120,1,95), color(120,90,60), map(v, 0, 1, 0, 1));    // 增強:綠
+        else
+            c = lerpColor(color(120,1,95), color(30,90,60), map(v, 0, -1, 0, 1));    // 抑制:棕
+        colorMode(RGB);
+        return c;
+    },
+    // 不用 oceanic,讓陸地上也看得到(MJO 是全球性波)
+    noiseChannels: [
+        [2, 0.5, 500, 40*24, 1, 0.5]   // 空間平滑、時間變化慢(約 40 天尺度)
+    ]
+};
+ENV_DEFS[SIM_MODE_NORMAL].MJO = {};
+ENV_DEFS[SIM_MODE_HYPER].MJO = {};
+ENV_DEFS[SIM_MODE_WILD].MJO = {};
+ENV_DEFS[SIM_MODE_MEGABLOBS].MJO = {};
+ENV_DEFS[SIM_MODE_EXPERIMENTAL].MJO = {};
+ENV_DEFS[SIM_MODE_SPOOKY].MJO = {};
+
+// -- ENSO -- //
+
+ENV_DEFS.defaults.ENSO = {
+    displayName: 'ENSO anomaly',
+    version: 0,
+    mapFunc: (u,x,y,z)=> ensoSSTEffect(u.basin, x, y),
+    displayFormat: v=>{
+        let str = '';
+        if(v >= 0) str += '+';
+        return str + round(v*10)/10 + '\u2103';
+    },
+    hueMap: (v)=>{
+        colorMode(HSB);
+        let c;
+        if(v<0) c = lerpColor(color(240,100,70), color(240,1,90), map(v,-2.5,0,0,1));
+        else c = lerpColor(color(0,1,90), color(0,100,70), map(v,0,2.5,0,1));
+        colorMode(RGB);
+        return c;
+    },
+    oceanic: true
+};
+ENV_DEFS[SIM_MODE_NORMAL].ENSO = {};
+ENV_DEFS[SIM_MODE_HYPER].ENSO = {};
+ENV_DEFS[SIM_MODE_WILD].ENSO = {};
+ENV_DEFS[SIM_MODE_MEGABLOBS].ENSO = {};
+ENV_DEFS[SIM_MODE_EXPERIMENTAL].ENSO = {};
+ENV_DEFS[SIM_MODE_SPOOKY].ENSO = {};
 
 // ---- Active Storm System Algorithm ---- //
 
@@ -1191,7 +1487,7 @@ STORM_ALGORITHM.defaults.core = function(sys,u){
     let nontropicalness = constrain(map(sys.lowerWarmCore,0.75,0,0,1),0,1);
 
     sys.organization *= 100;
-    if(!lnd) sys.organization += sq(map(SST,20,29,0,1,true))*3*tropicalness;
+    if(!lnd) sys.organization += sq(map(SST,20,sys.basin.actMode === SIM_MODE_HYPER ? 31 : 29,0,1,true))*3*tropicalness;
     if(!lnd && sys.organization<40) sys.organization += lerp(0,3,nontropicalness);
     // if(lnd) sys.organization -= pow(10,map(lnd,0.5,1,-3,1));
     // if(lnd && sys.organization<70 && moisture>0.3) sys.organization += pow(5,map(moisture,0.3,0.5,-1,1,true))*tropicalness;
@@ -1203,10 +1499,16 @@ STORM_ALGORITHM.defaults.core = function(sys,u){
     sys.organization = constrain(sys.organization,0,100);
     sys.organization /= 100;
 
-    const heat = constrain(map(SST, 25, 30.5, 0, 1), 0, 1);
-    const minimumPotentialPressure =
-        sys.basin.actMode === SIM_MODE_HYPER ? 870 :
+    const isHyper = sys.basin.actMode === SIM_MODE_HYPER;
+    const heatCap = isHyper ? 35 :
+        sys.basin.actMode === SIM_MODE_MEGABLOBS ? 32 : 30.5;
+    const heat = constrain(map(SST, 25, heatCap, 0, 1), 0, 1);
+
+    let minimumPotentialPressure =
         sys.basin.actMode === SIM_MODE_MEGABLOBS ? 895 : 905;
+    if(isHyper){
+        minimumPotentialPressure = lerp(880, 690, map(SST, 31, 35, 0, 1, true));
+    }
     const potentialPressure = lerp(1010, minimumPotentialPressure, pow(heat, 1.4));
     let targetPressure = lnd ? 1010 : lerp(1010, potentialPressure, pow(sys.organization, 3));
     sys.pressure = lerp(sys.pressure,targetPressure,(sys.pressure>targetPressure?0.05:0.08)*tropicalness);
@@ -1215,6 +1517,36 @@ STORM_ALGORITHM.defaults.core = function(sys,u){
     sys.pressure += random(constrain(970-sys.pressure,0,40))*nontropicalness;
     sys.pressure += 0.5*sys.interaction.shear/(1+map(sys.lowerWarmCore,0,1,4,0));
     sys.pressure += map(jet,0,75,5*pow(1-sys.depth,4),0,true);
+
+    if (sys.riActive === undefined) sys.riActive = 0;
+    if (sys.riTimer === undefined) sys.riTimer = 0;
+    if (sys.riCooldown === undefined) sys.riCooldown = 0;
+
+    const riConditions =
+        !lnd &&
+        SST >= 29 &&
+        shear < 2 &&
+        moisture > 0.6 &&
+        sys.organization > 0.7 &&
+        sys.upperWarmCore > 0.8;
+
+    if (sys.riActive) {
+        if (lnd || SST < 27 || shear > 3.5 || moisture < 0.4 || sys.riTimer <= 0) {
+            sys.riActive = 0;
+            sys.riCooldown = Math.floor(random(12, 24));
+        } else {
+            sys.pressure -= random(2, 5);
+            sys.riTimer--;
+        }
+    } else {
+        if (sys.riCooldown > 0) {
+            sys.riCooldown--;
+        } else if (riConditions && random() < 0.04) {
+            sys.riActive = 1;
+            sys.riTimer = Math.floor(random(8, 16));
+            sys.pressure -= random(2, 5);
+        }
+    }
 
     let targetWind = map(sys.pressure,1030,900,1,160)*map(sys.lowerWarmCore,1,0,1,0.6);
     sys.windSpeed = lerp(sys.windSpeed,targetWind,0.15);
@@ -1254,6 +1586,9 @@ STORM_ALGORITHM.defaults.core = function(sys,u){
         ){
             rate += 0.008;
         }
+
+        if(sys.basin.actMode === SIM_MODE_HYPER && rate > 0)
+            rate *= 1.5;
 
         sys.genesisProgress += rate;
 
@@ -1318,8 +1653,8 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].core = function(sys,u){
         sys.organization = lerp(sys.organization,0,0.03);
     sys.organization = constrain(sys.organization,0,1);
 
-    const heat = constrain(map(SST,21,31,0,1), 0, 1);
-    let hardCeiling = lerp(1015,880,heat);
+    const heat = constrain(map(SST,21,35,0,1), 0, 1);
+    let hardCeiling = lerp(1015,690,heat);
     if(lnd)
         hardCeiling = 990;
     let softCeiling = map(sys.organization,0.93,0.98,lerp(1020,hardCeiling,0.7),hardCeiling,true);
@@ -1331,6 +1666,36 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].core = function(sys,u){
     sys.pressure = lerp(sys.pressure,1040,map(sys.pos.y,HEIGHT*0.97,HEIGHT,0,0.15,true));
     sys.pressure = lerp(sys.pressure,1040,map(lnd,0.8,0.93,0,0.2,true));
     sys.pressure += random(-1,1);
+
+    if (sys.riActive === undefined) sys.riActive = 0;
+    if (sys.riTimer === undefined) sys.riTimer = 0;
+    if (sys.riCooldown === undefined) sys.riCooldown = 0;
+
+    const riConditions =
+        !lnd &&
+        SST >= 29 &&
+        shear < 2 &&
+        moisture > 0.6 &&
+        sys.organization > 0.7 &&
+        sys.upperWarmCore > 0.8;
+
+    if (sys.riActive) {
+        if (lnd || SST < 27 || shear > 3.5 || moisture < 0.4 || sys.riTimer <= 0) {
+            sys.riActive = 0;
+            sys.riCooldown = Math.floor(random(12, 24));
+        } else {
+            sys.pressure -= random(2, 5);
+            sys.riTimer--;
+        }
+    } else {
+        if (sys.riCooldown > 0) {
+            sys.riCooldown--;
+        } else if (riConditions && random() < 0.04) {
+            sys.riActive = 1;
+            sys.riTimer = Math.floor(random(8, 16));
+            sys.pressure -= random(2, 5);
+        }
+    }
 
     let targetWind = map(sys.pressure,1030,900,1,160)*map(sys.lowerWarmCore,1,0,1,0.6);
     sys.windSpeed = lerp(sys.windSpeed,targetWind,0.15);
@@ -1363,6 +1728,9 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].core = function(sys,u){
         ){
             rate += 0.008;
         }
+
+        if(sys.basin.actMode === SIM_MODE_HYPER && rate > 0)
+            rate *= 1.5;
 
         sys.genesisProgress += rate;
 
@@ -1505,12 +1873,12 @@ STORM_ALGORITHM.defaults.typeDetermination = function(sys,u){
 // Version number of a simulation mode's storm algorithm
 // Used for upgrading the active attribute values if needed
 
-STORM_ALGORITHM[SIM_MODE_NORMAL].version = 2;
-STORM_ALGORITHM[SIM_MODE_HYPER].version = 2;
-STORM_ALGORITHM[SIM_MODE_WILD].version = 2;
-STORM_ALGORITHM[SIM_MODE_MEGABLOBS].version = 2;
-STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].version = 3;
-STORM_ALGORITHM[SIM_MODE_SPOOKY].version = 2;
+STORM_ALGORITHM[SIM_MODE_NORMAL].version = 3;
+STORM_ALGORITHM[SIM_MODE_HYPER].version = 3;
+STORM_ALGORITHM[SIM_MODE_WILD].version = 3;
+STORM_ALGORITHM[SIM_MODE_MEGABLOBS].version = 3;
+STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].version = 4;
+STORM_ALGORITHM[SIM_MODE_SPOOKY].version = 3;
 
 // -- Upgrade -- //
 // Converts active attributes in case an active system is loaded after an algorithm change breaks old values
@@ -1533,6 +1901,11 @@ STORM_ALGORITHM[SIM_MODE_SPOOKY].upgrade = function(sys,data,oldVersion){
         else
             sys.genesisProgress = constrain(data.genesisProgress || 0, 0, 0.85);
     }
+    if(oldVersion < 3){
+        sys.riActive = data.riActive || 0;
+        sys.riTimer = data.riTimer || 0;
+        sys.riCooldown = data.riCooldown || 0;
+    }
 };
 
 STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].upgrade = function(sys,data,oldVersion){
@@ -1551,6 +1924,11 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].upgrade = function(sys,data,oldVersion){
             sys.genesisProgress = 1;
         else
             sys.genesisProgress = constrain(data.genesisProgress || 0, 0, 0.85);
+    }
+    if(oldVersion < 4){
+        sys.riActive = data.riActive || 0;
+        sys.riTimer = data.riTimer || 0;
+        sys.riCooldown = data.riCooldown || 0;
     }
 };
 

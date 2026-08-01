@@ -71,6 +71,7 @@ class Basin{
         //     );
         // }
         this.seed = opts.seed || moment().valueOf();
+        this.enso = new ENSOTracker(this);
         this.env = new Environment(this);
         this.saveName = load || AUTOSAVE_SAVE_NAME;
         if(load) this.initialized = this.load();
@@ -128,6 +129,7 @@ class Basin{
         let vp = this.viewingPresent();
         let os = this.getSeason(-1);
         this.tick++;
+        if(this.enso) this.enso.update();
         let vs = this.getSeason(viewTick);
         viewTick = this.tick;
         let curSeason = this.getSeason(-1);
@@ -541,6 +543,7 @@ class Basin{
                 'startYear',
                 'actMode'
             ]) b[p] = this[p];
+            if(this.enso) b.enso = this.enso.save();
             return db.transaction('rw',db.saves,db.seasons,()=>{
                 db.saves.put(obj,this.saveName);
                 for(let k in this.seasons){
@@ -618,6 +621,10 @@ class Basin{
                             'seed',
                             'startYear'
                         ]) this[p] = obj[p];
+                        if(obj.enso !== undefined)
+                            this.enso = new ENSOTracker(this, data.sub(obj.enso));
+                        else
+                            this.enso = new ENSOTracker(this);
                         if(obj.nameList) oldNameList = obj.nameList;
                         if(obj.sequentialNameIndex!==undefined) oldSeqNameIndex = obj.sequentialNameIndex;
                         if(obj.hypoCats) oldHypoCats = obj.hypoCats;

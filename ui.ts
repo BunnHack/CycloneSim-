@@ -1366,6 +1366,24 @@ UI.init = function(){
         dateNavigator.toggleShow();
     });
 
+    topBar.append(false, 110, 3, 100, 24, function(s){ // ENSO indicator
+        if(!(UI.viewBasin instanceof Basin) || !UI.viewBasin.enso) return;
+        let basin = UI.viewBasin;
+        let dateBtnWidth = textWidth(formatDate(basin.tickMoment(viewTick)) + (basin.viewingPresent() ? '' : ' [Analysis]')) + 12;
+        let e = basin.enso;
+        let p = e.phase();
+        let v = round(e.oni * 10) / 10;
+        let txtStr = 'ENSO: ' + p.name + ' (ONI ' + (v >= 0 ? '+' : '') + v + ')';
+        this.setBox(5 + dateBtnWidth, undefined, textWidth(txtStr) + 6);
+        if(this.isHovered()){
+            fill(COLORS.UI.buttonHover);
+            s.fullRect();
+        }
+        fill(COLORS.UI.text);
+        textAlign(LEFT, TOP);
+        text(txtStr, 3, 3);
+    });
+
     let zoomControlBox = primaryWrapper.append(false, WIDTH - 135, topBar.height + 8, 125, 26, function(s){
         fill(COLORS.UI.box);
         noStroke();
