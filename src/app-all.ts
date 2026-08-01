@@ -7187,25 +7187,26 @@ function genesisPotential(basin, x, y){
     const shearVec = basin.env.get("shear", x, y, t);
     const shear = shearVec ? shearVec.mag() : 0;
 
-    const sstFactor = constrain(map(sst, 25, 29, 0, 1), 0, 1);
+    const sstFactor = constrain(map(sst, 24.5, 29, 0, 1), 0, 1);
     if(sstFactor === 0) return 0;
 
-    const moistureFactor = constrain(map(moisture, 0.45, 0.7, 0, 1), 0, 1);
-    const shearFactor = constrain(map(shear, 3.5, 1, 0, 1), 0, 1);
+    const moistureFactor = constrain(map(moisture, 0.4, 0.68, 0, 1), 0, 1);
+    const shearFactor = constrain(map(shear, 4.5, 1.2, 0, 1), 0, 1);
 
     const lowLatitudeFactor = constrain(map(lat, 3, 8, 0, 1), 0, 1);
     const highLatitudeFactor = constrain(map(lat, 30, 22, 0, 1), 0, 1);
     const latitudeFactor = lowLatitudeFactor * highLatitudeFactor;
     if(latitudeFactor === 0) return 0;
 
-    let dynamicsFactor = 0.2;
+    let dynamicsFactor = 0.4;
     try {
         const dynamics = lowLevelDynamics(basin, x, y, t);
         const vorticityFactor = constrain(map(dynamics.vorticity, -0.005, 0.02, 0, 1), 0, 1);
         const convergenceFactor = constrain(map(dynamics.convergence, -0.005, 0.02, 0, 1), 0, 1);
-        dynamicsFactor = 0.2 + 0.8 * (vorticityFactor * 0.5 + convergenceFactor * 0.5);
+        const dynamicsScore = vorticityFactor * 0.5 + convergenceFactor * 0.5;
+        dynamicsFactor = 0.4 + 0.6 * dynamicsScore;
     } catch(e) {
-        dynamicsFactor = 0.2;
+        dynamicsFactor = 0.4;
     }
 
     const thermoFactors = [
@@ -7844,6 +7845,9 @@ ENV_DEFS.defaults.SSTAnomaly = {
         v = -r*v;
         v = v*i;
         if(u.modifiers.bigBlobBase!==undefined && v>u.modifiers.bigBlobExponentThreshold) v += pow(u.modifiers.bigBlobBase,v-u.modifiers.bigBlobExponentThreshold)-1;
+        let anomalyScale = u.modifiers.anomalyScale;
+        if(anomalyScale === undefined) anomalyScale = 1;
+        v *= anomalyScale;
         const anomalyMin = u.modifiers.anomalyMin !== undefined ? u.modifiers.anomalyMin : -6;
         const anomalyMax = u.modifiers.anomalyMax !== undefined ? u.modifiers.anomalyMax : 6;
         return constrain(v, anomalyMin, anomalyMax);
@@ -7873,7 +7877,13 @@ ENV_DEFS.defaults.SSTAnomaly = {
         [6,0.5,150,3000,0.05,1.5]
     ]
 };
-ENV_DEFS[SIM_MODE_NORMAL].SSTAnomaly = {};
+ENV_DEFS[SIM_MODE_NORMAL].SSTAnomaly = {
+    modifiers: {
+        anomalyScale: 0.6,
+        anomalyMin: -3,
+        anomalyMax: 3
+    }
+};
 ENV_DEFS[SIM_MODE_HYPER].SSTAnomaly = {};
 ENV_DEFS[SIM_MODE_WILD].SSTAnomaly = {
     modifiers: {
@@ -7945,7 +7955,14 @@ ENV_DEFS.defaults.SST = {
         peakSeasonTropicsTemp: 29
     }
 };
-ENV_DEFS[SIM_MODE_NORMAL].SST = {};
+ENV_DEFS[SIM_MODE_NORMAL].SST = {
+    modifiers: {
+        offSeasonPolarTemp: -3,
+        peakSeasonPolarTemp: 10,
+        offSeasonTropicsTemp: 27,
+        peakSeasonTropicsTemp: 30.5
+    }
+};
 ENV_DEFS[SIM_MODE_HYPER].SST = {
     modifiers: {
         offSeasonPolarTemp: 5,
@@ -8166,13 +8183,13 @@ STORM_ALGORITHM.defaults.core = function(sys,u){
     if(sys.type === TROPWAVE || sys.type === EXTROP || sys.genesisProgress < 1){
         const g = genesisPotential(sys.basin, sys.pos.x, sys.pos.y);
         let rate;
-        if(g >= 0.65)
+        if(g >= 0.58)
             rate = 0.025;
-        else if(g >= 0.55)
-            rate = 0.015;
         else if(g >= 0.48)
+            rate = 0.015;
+        else if(g >= 0.38)
             rate = 0.007;
-        else if(g < 0.35)
+        else if(g < 0.25)
             rate = -0.012;
         else
             rate = -0.003;
@@ -8189,7 +8206,7 @@ STORM_ALGORITHM.defaults.core = function(sys,u){
 
         const decisiveGenesis =
             canTropicalCycloneForm(sys) ||
-            (g >= 0.55 &&
+            (g >= 0.48 &&
              sys.genesisProgress >= 0.82 &&
              sys.pressure < 998 &&
              sys.windSpeed >= 34);
@@ -8275,13 +8292,13 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].core = function(sys,u){
     if(sys.type === TROPWAVE || sys.type === EXTROP || sys.genesisProgress < 1){
         const g = genesisPotential(sys.basin, sys.pos.x, sys.pos.y);
         let rate;
-        if(g >= 0.65)
+        if(g >= 0.58)
             rate = 0.025;
-        else if(g >= 0.55)
-            rate = 0.015;
         else if(g >= 0.48)
+            rate = 0.015;
+        else if(g >= 0.38)
             rate = 0.007;
-        else if(g < 0.35)
+        else if(g < 0.25)
             rate = -0.012;
         else
             rate = -0.003;
@@ -8298,7 +8315,7 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].core = function(sys,u){
 
         const decisiveGenesis =
             canTropicalCycloneForm(sys) ||
-            (g >= 0.55 &&
+            (g >= 0.48 &&
              sys.genesisProgress >= 0.82 &&
              sys.pressure < 998 &&
              sys.windSpeed >= 34);
