@@ -544,8 +544,8 @@ class Basin{
                 'actMode'
             ]) b[p] = this[p];
             if(this.enso) b.enso = this.enso.save();
-            return db.transaction('rw',db.saves,db.seasons,()=>{
-                db.saves.put(obj,this.saveName);
+            return db.transaction('rw',db.saves,db.seasons,async ()=>{
+                await db.saves.put(obj,this.saveName);
                 for(let k in this.seasons){
                     if(this.seasons[k] && this.seasons[k].modified){
                         let seas = {};
@@ -554,16 +554,15 @@ class Basin{
                         seas.season = parseInt(k);
                         seas.value = this.seasons[k].save();
                         let cur = db.seasons.where('[saveName+season]').equals([this.saveName,seas.season]);
-                        cur.count().then(c=>{
-                            if(c>1){
-                                cur.delete().then(()=>{
-                                    db.seasons.put(seas);
-                                });
-                            }else if(c===1) cur.modify((s,ref)=>{
-                                ref.value = seas;
-                            });
-                            else db.seasons.put(seas);
-                        });
+                        let keys = await cur.primaryKeys();
+                        if(keys.length > 0){
+                            await db.seasons.update(keys[0], seas);
+                            if(keys.length > 1){
+                                await db.seasons.bulkDelete(keys.slice(1));
+                            }
+                        }else{
+                            await db.seasons.put(seas);
+                        }
                     }
                 }
             }).then(()=>{

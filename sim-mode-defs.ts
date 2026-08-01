@@ -64,8 +64,11 @@ SPAWN_RULES.defaults.archetypes = {
     'tw': {
         x: (b) => {
             let loc = sampleTwLocation(b);
-            b._tempTwY = loc.y;
-            return loc.x;
+            if (loc) {
+                b._tempTwY = loc.y;
+                return loc.x;
+            }
+            return random(0, WIDTH - 1);
         },
         y: (b, x) => {
             let y = b._tempTwY !== undefined ? b._tempTwY : b.hemY(random(HEIGHT * 0.7, HEIGHT * 0.9));
@@ -555,8 +558,11 @@ SPAWN_RULES[SIM_MODE_EXPERIMENTAL].archetypes = {
     'tw': {
         x: (b) => {
             let loc = sampleTwLocation(b);
-            b._tempTwY = loc.y;
-            return loc.x;
+            if (loc) {
+                b._tempTwY = loc.y;
+                return loc.x;
+            }
+            return random(0, WIDTH - 1);
         },
         y: (b, x) => {
             let y = b._tempTwY !== undefined ? b._tempTwY : b.hemY(random(HEIGHT * 0.7, HEIGHT * 0.9));
@@ -1073,10 +1079,10 @@ class ENSOTracker{
         const monthIndex = m.year() * 12 + m.month();
 
         if(monthIndex !== this.lastUpdateMonth){
+            this.prevNino34 = this.nino34;
             if(this.lastUpdateMonth >= 0)
                 this.stepMonth(m.month());
             this.lastUpdateMonth = monthIndex;
-            this.prevNino34 = this.nino34;
         }
 
         // 月內平滑插值:SST 等環境效應不會在月初瞬間跳變
@@ -1483,14 +1489,20 @@ STORM_ALGORITHM.defaults.core = function(sys,u){
     sys.upperWarmCore = lerp(sys.upperWarmCore,sys.lowerWarmCore,sys.lowerWarmCore>sys.upperWarmCore ? 0.05 : 0.4);
     sys.lowerWarmCore = constrain(sys.lowerWarmCore,0,1);
     sys.upperWarmCore = constrain(sys.upperWarmCore,0,1);
+
+    if(lnd){
+        const terrainFactor = map(lnd, 0.5, 0.85, 1, 3, true);
+        const coreDecay = 0.08 * terrainFactor;
+        sys.lowerWarmCore = lerp(sys.lowerWarmCore, 0, coreDecay);
+        sys.upperWarmCore = lerp(sys.upperWarmCore, sys.lowerWarmCore, 0.1);
+    }
+
     let tropicalness = constrain(map(sys.lowerWarmCore,0.5,1,0,1),0,sys.upperWarmCore);
     let nontropicalness = constrain(map(sys.lowerWarmCore,0.75,0,0,1),0,1);
 
     sys.organization *= 100;
     if(!lnd) sys.organization += sq(map(SST,20,sys.basin.actMode === SIM_MODE_HYPER ? 31 : 29,0,1,true))*3*tropicalness;
     if(!lnd && sys.organization<40) sys.organization += lerp(0,3,nontropicalness);
-    // if(lnd) sys.organization -= pow(10,map(lnd,0.5,1,-3,1));
-    // if(lnd && sys.organization<70 && moisture>0.3) sys.organization += pow(5,map(moisture,0.3,0.5,-1,1,true))*tropicalness;
     sys.organization -= pow(2,4-((HEIGHT-sys.basin.hemY(sys.pos.y))/(HEIGHT*0.01)));
     sys.organization -= (pow(map(sys.depth,0,1,1.17,1.31),shear)-1)*map(sys.depth,0,1,4.7,1.2);
     sys.organization -= map(moisture,0,0.65,3,0,true)*shear;
@@ -1498,6 +1510,11 @@ STORM_ALGORITHM.defaults.core = function(sys,u){
     sys.organization -= pow(1.3,20-SST)*tropicalness;
     sys.organization = constrain(sys.organization,0,100);
     sys.organization /= 100;
+
+    if(lnd){
+        const terrainFactor = map(lnd, 0.5, 0.85, 1, 3, true);
+        sys.organization = lerp(sys.organization, 0, 0.05 * terrainFactor);
+    }
 
     const isHyper = sys.basin.actMode === SIM_MODE_HYPER;
     const heatCap = isHyper ? 35 :
@@ -1511,7 +1528,13 @@ STORM_ALGORITHM.defaults.core = function(sys,u){
     }
     const potentialPressure = lerp(1010, minimumPotentialPressure, pow(heat, 1.4));
     let targetPressure = lnd ? 1010 : lerp(1010, potentialPressure, pow(sys.organization, 3));
-    sys.pressure = lerp(sys.pressure,targetPressure,(sys.pressure>targetPressure?0.05:0.08)*tropicalness);
+    if(lnd){
+        const fillRate = 0.1 * map(lnd, 0.5, 0.85, 1, 2, true);
+        sys.pressure = lerp(sys.pressure, targetPressure, fillRate);
+    }else{
+        sys.pressure = lerp(sys.pressure, targetPressure,
+            (sys.pressure > targetPressure ? 0.05 : 0.08) * tropicalness);
+    }
     sys.pressure -= random(-3,3.5)*nontropicalness;
     if(sys.organization<0.3) sys.pressure += random(-2,2.5)*tropicalness;
     sys.pressure += random(constrain(970-sys.pressure,0,40))*nontropicalness;
@@ -1535,7 +1558,7 @@ STORM_ALGORITHM.defaults.core = function(sys,u){
             sys.riActive = 0;
             sys.riCooldown = Math.floor(random(12, 24));
         } else {
-            sys.pressure -= random(2, 5);
+            sys.pressure = max(sys.pressure - random(2, 5), potentialPressure - 15);
             sys.riTimer--;
         }
     } else {
@@ -1544,12 +1567,13 @@ STORM_ALGORITHM.defaults.core = function(sys,u){
         } else if (riConditions && random() < 0.04) {
             sys.riActive = 1;
             sys.riTimer = Math.floor(random(8, 16));
-            sys.pressure -= random(2, 5);
+            sys.pressure = max(sys.pressure - random(2, 5), potentialPressure - 15);
         }
     }
 
     let targetWind = map(sys.pressure,1030,900,1,160)*map(sys.lowerWarmCore,1,0,1,0.6);
-    sys.windSpeed = lerp(sys.windSpeed,targetWind,0.15);
+    const windResponse = lnd ? 0.35 : 0.15;
+    sys.windSpeed = lerp(sys.windSpeed,targetWind,windResponse);
 
     let targetDepth = map(
         sys.upperWarmCore,
@@ -1644,13 +1668,23 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].core = function(sys,u){
         sys.upperWarmCore = lerp(sys.upperWarmCore,sys.lowerWarmCore,0.015);
     sys.lowerWarmCore = constrain(sys.lowerWarmCore,0,1);
     sys.upperWarmCore = constrain(sys.upperWarmCore,0,1);
+
+    if(lnd){
+        const terrainFactor = map(lnd, 0.5, 0.85, 1, 3, true);
+        const coreDecay = 0.08 * terrainFactor;
+        sys.lowerWarmCore = lerp(sys.lowerWarmCore, 0, coreDecay);
+        sys.upperWarmCore = lerp(sys.upperWarmCore, sys.lowerWarmCore, 0.1);
+    }
+
     let tropicalness = (sys.lowerWarmCore+sys.upperWarmCore)/2;
 
     if(!lnd)
         sys.organization = lerp(sys.organization,1,sq(tropicalness)*map(SST,21,31,0,0.05,true));
     sys.organization = lerp(sys.organization,0,pow(3,shear*(1-moisture)*2.3)*0.0005);
-    if(lnd>0.7)
-        sys.organization = lerp(sys.organization,0,0.03);
+    if(lnd) {
+        const terrainFactor = map(lnd, 0.5, 0.85, 1, 3, true);
+        sys.organization = lerp(sys.organization, 0, 0.05 * terrainFactor);
+    }
     sys.organization = constrain(sys.organization,0,1);
 
     const heat = constrain(map(SST,21,35,0,1), 0, 1);
@@ -1684,7 +1718,7 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].core = function(sys,u){
             sys.riActive = 0;
             sys.riCooldown = Math.floor(random(12, 24));
         } else {
-            sys.pressure -= random(2, 5);
+            sys.pressure = max(sys.pressure - random(2, 5), softCeiling - 15);
             sys.riTimer--;
         }
     } else {
@@ -1693,12 +1727,13 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].core = function(sys,u){
         } else if (riConditions && random() < 0.04) {
             sys.riActive = 1;
             sys.riTimer = Math.floor(random(8, 16));
-            sys.pressure -= random(2, 5);
+            sys.pressure = max(sys.pressure - random(2, 5), softCeiling - 15);
         }
     }
 
     let targetWind = map(sys.pressure,1030,900,1,160)*map(sys.lowerWarmCore,1,0,1,0.6);
-    sys.windSpeed = lerp(sys.windSpeed,targetWind,0.15);
+    const windResponse = lnd ? 0.35 : 0.15;
+    sys.windSpeed = lerp(sys.windSpeed,targetWind,windResponse);
 
     sys.depth = lerp(sys.depth,1,(1-tropicalness)*0.02);
     sys.depth = lerp(sys.depth,0,tropicalness*(1-sys.organization)*0.02);
@@ -1729,9 +1764,6 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].core = function(sys,u){
             rate += 0.008;
         }
 
-        if(sys.basin.actMode === SIM_MODE_HYPER && rate > 0)
-            rate *= 1.5;
-
         sys.genesisProgress += rate;
 
         const decisiveGenesis =
@@ -1739,7 +1771,7 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].core = function(sys,u){
             (g >= 0.48 &&
              sys.genesisProgress >= 0.82 &&
              sys.pressure < 998 &&
-             sys.windSpeed >= 34);
+             sys.windSpeed >= 33);
 
         if(decisiveGenesis)
             sys.genesisProgress = 1;
@@ -1909,13 +1941,11 @@ STORM_ALGORITHM[SIM_MODE_SPOOKY].upgrade = function(sys,data,oldVersion){
 };
 
 STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].upgrade = function(sys,data,oldVersion){
-    if(oldVersion < 1){
-        sys.organization = data.organization || 0;
-        sys.lowerWarmCore = data.lowerWarmCore || 0;
-        sys.upperWarmCore = data.upperWarmCore || 0;
-        sys.depth = data.depth || 0;
-        sys.kaboom = 0;
-    }
+    sys.organization = data.organization || 0;
+    sys.lowerWarmCore = data.lowerWarmCore || 0;
+    sys.upperWarmCore = data.upperWarmCore || 0;
+    sys.depth = data.depth || 0;
+    sys.kaboom = data.kaboom || 0;
     if(oldVersion < 2){
         sys.genesisProgress = (sys.type === TROP || sys.type === SUBTROP || data.type === TROP || data.type === SUBTROP) ? 1 : 0;
     }
