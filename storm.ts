@@ -928,6 +928,21 @@ class StormData{
     }
 }
 
+function nearbyLand(basin, x, y){
+    if(!land) return 0;
+    let maxV = 0;
+    for(let a = 0; a < 8; a++){
+        const ang = a * Math.PI / 4;
+        const nx = x + 60 * Math.cos(ang);
+        const ny = y + 60 * Math.sin(ang);
+        const c = Coordinate.convertFromXY(basin.mapType, nx, ny);
+        const v = land.get(c);
+        let val = typeof v === 'number' ? v : (v ? 1 : 0);
+        if(val > maxV) maxV = val;
+    }
+    return maxV;
+}
+
 class ActiveSystem extends StormData{
     constructor(basin,data){
         if(!(basin instanceof Basin)) return;
@@ -1066,6 +1081,7 @@ class ActiveSystem extends StormData{
         let u = {};
         u.f = (field)=>basin.env.get(field,this.pos.x,this.pos.y,basin.tick);
         u.land = ()=>land ? land.get(this.coord()) : false;
+        u.nearbyLand = ()=>nearbyLand(basin,this.pos.x,this.pos.y);
 
         // this.getSteering();
         if(STORM_ALGORITHM[basin.actMode].steering)

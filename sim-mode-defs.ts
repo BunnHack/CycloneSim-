@@ -1478,10 +1478,15 @@ STORM_ALGORITHM.defaults.core = function(sys,u){
     let jet = u.f("jetstream");
     jet = sys.basin.hemY(sys.pos.y)-jet;
     let lnd = u.land();
+    let nearLnd = u.nearbyLand ? u.nearbyLand() : lnd;
+    let lndVal = typeof lnd === 'number' ? lnd : (lnd ? 1 : 0);
+    let nearLndVal = typeof nearLnd === 'number' ? nearLnd : (nearLnd ? 1 : 0);
+    const landExposure = max(lndVal, nearLndVal * 0.6);
+
     let moisture = u.f("moisture");
     let shear = u.f("shear").mag()+sys.interaction.shear;
     
-    let targetWarmCore = (lnd ?
+    let targetWarmCore = (landExposure > 0.45 ?
         sys.lowerWarmCore :
         max(pow(map(SST,10,25,0,1,true),3),sys.lowerWarmCore)
     )*map(jet,0,75,sq(1-sys.depth),1,true);
@@ -1490,19 +1495,19 @@ STORM_ALGORITHM.defaults.core = function(sys,u){
     sys.lowerWarmCore = constrain(sys.lowerWarmCore,0,1);
     sys.upperWarmCore = constrain(sys.upperWarmCore,0,1);
 
-    if(lnd){
-        const terrainFactor = map(lnd, 0.5, 0.85, 1, 3, true);
-        const coreDecay = 0.08 * terrainFactor;
+    if(landExposure > 0.45){
+        const terrainFactor = map(landExposure, 0.45, 0.85, 1, 3, true);
+        const coreDecay = 0.02 * terrainFactor;
         sys.lowerWarmCore = lerp(sys.lowerWarmCore, 0, coreDecay);
-        sys.upperWarmCore = lerp(sys.upperWarmCore, sys.lowerWarmCore, 0.1);
+        sys.upperWarmCore = lerp(sys.upperWarmCore, sys.lowerWarmCore, 0.05);
     }
 
     let tropicalness = constrain(map(sys.lowerWarmCore,0.5,1,0,1),0,sys.upperWarmCore);
     let nontropicalness = constrain(map(sys.lowerWarmCore,0.75,0,0,1),0,1);
 
     sys.organization *= 100;
-    if(!lnd) sys.organization += sq(map(SST,20,sys.basin.actMode === SIM_MODE_HYPER ? 31 : 29,0,1,true))*3*tropicalness;
-    if(!lnd && sys.organization<40) sys.organization += lerp(0,3,nontropicalness);
+    if(landExposure <= 0.45) sys.organization += sq(map(SST,20,sys.basin.actMode === SIM_MODE_HYPER ? 31 : 29,0,1,true))*3*tropicalness;
+    if(landExposure <= 0.45 && sys.organization<40) sys.organization += lerp(0,3,nontropicalness);
     sys.organization -= pow(2,4-((HEIGHT-sys.basin.hemY(sys.pos.y))/(HEIGHT*0.01)));
     sys.organization -= (pow(map(sys.depth,0,1,1.17,1.31),shear)-1)*map(sys.depth,0,1,4.7,1.2);
     sys.organization -= map(moisture,0,0.65,3,0,true)*shear;
@@ -1511,8 +1516,8 @@ STORM_ALGORITHM.defaults.core = function(sys,u){
     sys.organization = constrain(sys.organization,0,100);
     sys.organization /= 100;
 
-    if(lnd){
-        const terrainFactor = map(lnd, 0.5, 0.85, 1, 3, true);
+    if(landExposure > 0.45){
+        const terrainFactor = map(landExposure, 0.45, 0.85, 1, 3, true);
         sys.organization = lerp(sys.organization, 0, 0.05 * terrainFactor);
     }
 
@@ -1527,10 +1532,10 @@ STORM_ALGORITHM.defaults.core = function(sys,u){
         minimumPotentialPressure = lerp(880, 690, map(SST, 31, 35, 0, 1, true));
     }
     const potentialPressure = lerp(1010, minimumPotentialPressure, pow(heat, 1.4));
-    let targetPressure = lnd ? 1010 : lerp(1010, potentialPressure, pow(sys.organization, 3));
-    if(lnd){
-        const fillRate = 0.1 * map(lnd, 0.5, 0.85, 1, 2, true);
-        sys.pressure = lerp(sys.pressure, targetPressure, fillRate);
+    let targetPressure = landExposure > 0.45 ? 1010 : lerp(1010, potentialPressure, pow(sys.organization, 3));
+    if(landExposure > 0.45){
+        const fillRate = 0.06 * map(landExposure, 0.45, 0.85, 1, 2.2, true);
+        sys.pressure = lerp(sys.pressure, 1010, fillRate);
     }else{
         sys.pressure = lerp(sys.pressure, targetPressure,
             (sys.pressure > targetPressure ? 0.05 : 0.08) * tropicalness);
@@ -1546,7 +1551,7 @@ STORM_ALGORITHM.defaults.core = function(sys,u){
     if (sys.riCooldown === undefined) sys.riCooldown = 0;
 
     const riConditions =
-        !lnd &&
+        landExposure <= 0.45 &&
         SST >= 29 &&
         shear < 2 &&
         moisture > 0.6 &&
@@ -1554,7 +1559,7 @@ STORM_ALGORITHM.defaults.core = function(sys,u){
         sys.upperWarmCore > 0.8;
 
     if (sys.riActive) {
-        if (lnd || SST < 27 || shear > 3.5 || moisture < 0.4 || sys.riTimer <= 0) {
+        if (landExposure > 0.45 || SST < 27 || shear > 3.5 || moisture < 0.4 || sys.riTimer <= 0) {
             sys.riActive = 0;
             sys.riCooldown = Math.floor(random(12, 24));
         } else {
@@ -1572,7 +1577,7 @@ STORM_ALGORITHM.defaults.core = function(sys,u){
     }
 
     let targetWind = map(sys.pressure,1030,900,1,160)*map(sys.lowerWarmCore,1,0,1,0.6);
-    const windResponse = lnd ? 0.35 : 0.15;
+    const windResponse = landExposure > 0.45 ? 0.3 : 0.15;
     sys.windSpeed = lerp(sys.windSpeed,targetWind,windResponse);
 
     let targetDepth = map(
@@ -1621,7 +1626,7 @@ STORM_ALGORITHM.defaults.core = function(sys,u){
             (g >= 0.48 &&
              sys.genesisProgress >= 0.82 &&
              sys.pressure < 998 &&
-             sys.windSpeed >= 34);
+             sys.windSpeed >= 33);
 
         if(decisiveGenesis)
             sys.genesisProgress = 1;
@@ -1657,6 +1662,11 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].core = function(sys,u){
     let jet = u.f("jetstream");
     jet = sys.basin.hemY(sys.pos.y)-jet;
     let lnd = u.land();
+    let nearLnd = u.nearbyLand ? u.nearbyLand() : lnd;
+    let lndVal = typeof lnd === 'number' ? lnd : (lnd ? 1 : 0);
+    let nearLndVal = typeof nearLnd === 'number' ? nearLnd : (nearLnd ? 1 : 0);
+    const landExposure = max(lndVal, nearLndVal * 0.6);
+
     let moisture = u.f("moisture");
     let shear = u.f("shear").mag()+sys.interaction.shear;
     
@@ -1669,27 +1679,27 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].core = function(sys,u){
     sys.lowerWarmCore = constrain(sys.lowerWarmCore,0,1);
     sys.upperWarmCore = constrain(sys.upperWarmCore,0,1);
 
-    if(lnd){
-        const terrainFactor = map(lnd, 0.5, 0.85, 1, 3, true);
-        const coreDecay = 0.08 * terrainFactor;
+    if(landExposure > 0.45){
+        const terrainFactor = map(landExposure, 0.45, 0.85, 1, 3, true);
+        const coreDecay = 0.02 * terrainFactor;
         sys.lowerWarmCore = lerp(sys.lowerWarmCore, 0, coreDecay);
-        sys.upperWarmCore = lerp(sys.upperWarmCore, sys.lowerWarmCore, 0.1);
+        sys.upperWarmCore = lerp(sys.upperWarmCore, sys.lowerWarmCore, 0.05);
     }
 
     let tropicalness = (sys.lowerWarmCore+sys.upperWarmCore)/2;
 
-    if(!lnd)
+    if(landExposure <= 0.45)
         sys.organization = lerp(sys.organization,1,sq(tropicalness)*map(SST,21,31,0,0.05,true));
     sys.organization = lerp(sys.organization,0,pow(3,shear*(1-moisture)*2.3)*0.0005);
-    if(lnd) {
-        const terrainFactor = map(lnd, 0.5, 0.85, 1, 3, true);
+    if(landExposure > 0.45) {
+        const terrainFactor = map(landExposure, 0.45, 0.85, 1, 3, true);
         sys.organization = lerp(sys.organization, 0, 0.05 * terrainFactor);
     }
     sys.organization = constrain(sys.organization,0,1);
 
     const heat = constrain(map(SST,21,35,0,1), 0, 1);
     let hardCeiling = lerp(1015,690,heat);
-    if(lnd)
+    if(landExposure > 0.45)
         hardCeiling = 990;
     let softCeiling = map(sys.organization,0.93,0.98,lerp(1020,hardCeiling,0.7),hardCeiling,true);
     sys.pressure = lerp(sys.pressure,1032,0.006);
@@ -1698,7 +1708,7 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].core = function(sys,u){
     if(sys.pressure<1000)
         sys.pressure = lerp(sys.pressure,1000,tropicalness*(1-sys.organization)*0.01);
     sys.pressure = lerp(sys.pressure,1040,map(sys.pos.y,HEIGHT*0.97,HEIGHT,0,0.15,true));
-    sys.pressure = lerp(sys.pressure,1040,map(lnd,0.8,0.93,0,0.2,true));
+    sys.pressure = lerp(sys.pressure,1040,map(landExposure,0.8,0.93,0,0.2,true));
     sys.pressure += random(-1,1);
 
     if (sys.riActive === undefined) sys.riActive = 0;
@@ -1706,7 +1716,7 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].core = function(sys,u){
     if (sys.riCooldown === undefined) sys.riCooldown = 0;
 
     const riConditions =
-        !lnd &&
+        landExposure <= 0.45 &&
         SST >= 29 &&
         shear < 2 &&
         moisture > 0.6 &&
@@ -1714,7 +1724,7 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].core = function(sys,u){
         sys.upperWarmCore > 0.8;
 
     if (sys.riActive) {
-        if (lnd || SST < 27 || shear > 3.5 || moisture < 0.4 || sys.riTimer <= 0) {
+        if (landExposure > 0.45 || SST < 27 || shear > 3.5 || moisture < 0.4 || sys.riTimer <= 0) {
             sys.riActive = 0;
             sys.riCooldown = Math.floor(random(12, 24));
         } else {
@@ -1732,7 +1742,7 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].core = function(sys,u){
     }
 
     let targetWind = map(sys.pressure,1030,900,1,160)*map(sys.lowerWarmCore,1,0,1,0.6);
-    const windResponse = lnd ? 0.35 : 0.15;
+    const windResponse = landExposure > 0.45 ? 0.3 : 0.15;
     sys.windSpeed = lerp(sys.windSpeed,targetWind,windResponse);
 
     sys.depth = lerp(sys.depth,1,(1-tropicalness)*0.02);
@@ -1869,20 +1879,25 @@ STORM_ALGORITHM.defaults.typeDetermination = function(sys,u){
         sys.genesisProgress = (sys.type === TROP || sys.type === SUBTROP) ? 1 : 0;
 
     const canForm = canTropicalCycloneForm(sys);
+    const lnd = u ? u.land() : 0;
+    const warmCoreFloor = lnd ? 0.45 : 0.55;
+    const upperFloorT = lnd ? 0.50 : 0.56;
+    const upperFloorS = lnd ? 0.51 : 0.57;
+    const orgThresh = lnd ? 0.25 : 0.4;
 
     switch(sys.type){
         case TROP:
-            sys.type = sys.lowerWarmCore < 0.55 ? EXTROP : ((sys.organization < 0.4 && sys.windSpeed < 50) || sys.windSpeed < 20) ? (sys.upperWarmCore < 0.56 ? EXTROP : TROPWAVE) : (sys.upperWarmCore < 0.56 ? SUBTROP : TROP);
+            sys.type = sys.lowerWarmCore < warmCoreFloor ? EXTROP : ((sys.organization < orgThresh && sys.windSpeed < 50) || sys.windSpeed < 20) ? (sys.upperWarmCore < upperFloorT ? EXTROP : TROPWAVE) : (sys.upperWarmCore < upperFloorT ? SUBTROP : TROP);
             break;
         case SUBTROP:
-            sys.type = sys.lowerWarmCore < 0.55 ? EXTROP : ((sys.organization < 0.4 && sys.windSpeed < 50) || sys.windSpeed < 20) ? (sys.upperWarmCore < 0.57 ? EXTROP : TROPWAVE) : (sys.upperWarmCore < 0.57 ? SUBTROP : TROP);
+            sys.type = sys.lowerWarmCore < warmCoreFloor ? EXTROP : ((sys.organization < orgThresh && sys.windSpeed < 50) || sys.windSpeed < 20) ? (sys.upperWarmCore < upperFloorS ? EXTROP : TROPWAVE) : (sys.upperWarmCore < upperFloorS ? SUBTROP : TROP);
             break;
         case TROPWAVE:
             if(sys.lowerWarmCore < 0.45)
                 sys.type = EXTROP;
             else if(!canForm)
                 sys.type = TROPWAVE;
-            else if(sys.upperWarmCore < 0.56)
+            else if(sys.upperWarmCore < upperFloorT)
                 sys.type = SUBTROP;
             else
                 sys.type = TROP;
@@ -1892,7 +1907,7 @@ STORM_ALGORITHM.defaults.typeDetermination = function(sys,u){
                 sys.type = EXTROP;
             else if(!canForm)
                 sys.type = TROPWAVE;
-            else if(sys.upperWarmCore < 0.57)
+            else if(sys.upperWarmCore < upperFloorS)
                 sys.type = SUBTROP;
             else
                 sys.type = TROP;
