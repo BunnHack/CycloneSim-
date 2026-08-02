@@ -23,7 +23,9 @@ ACTIVE_ATTRIBS.defaults = [
     'genesisProgress',
     'riActive',
     'riTimer',
-    'riCooldown'
+    'riCooldown',
+    'landTropicalGrace',
+    'size'
 ];
 
 ACTIVE_ATTRIBS[SIM_MODE_EXPERIMENTAL] = [
@@ -35,7 +37,9 @@ ACTIVE_ATTRIBS[SIM_MODE_EXPERIMENTAL] = [
     'kaboom',
     'riActive',
     'riTimer',
-    'riCooldown'
+    'riCooldown',
+    'landTropicalGrace',
+    'size'
 ];
 
 // ---- Season Curve ---- //
@@ -81,7 +85,8 @@ SPAWN_RULES.defaults.archetypes = {
         organization: [0,0.3],
         lowerWarmCore: 1,
         upperWarmCore: 1,
-        depth: 0
+        depth: 0,
+        size: [0.25, 0.45]
     },
     'ex': {
         x: ()=>random(0,WIDTH-1),
@@ -92,18 +97,21 @@ SPAWN_RULES.defaults.archetypes = {
         organization: 0,
         lowerWarmCore: 0,
         upperWarmCore: 0,
-        depth: 1
+        depth: 1,
+        size: [0.45, 0.7]
     },
     'l': {
         inherit: 'tw',
         pressure: 1015,
         windSpeed: 15,
-        organization: 0.2
+        organization: 0.2,
+        size: 0.35
     },
     'x': {
         inherit: 'ex',
         pressure: 1005,
-        windSpeed: 15
+        windSpeed: 15,
+        size: 0.5
     },
     'tc': {
         pressure: 1005,
@@ -113,84 +121,101 @@ SPAWN_RULES.defaults.archetypes = {
         lowerWarmCore: 1,
         upperWarmCore: 1,
         depth: 0,
-        genesisProgress: 1
+        genesisProgress: 1,
+        size: 0.45
     },
     'stc': {
         inherit: 'tc',
         type: SUBTROP,
         lowerWarmCore: 0.6,
-        upperWarmCore: 0.5
+        upperWarmCore: 0.5,
+        size: 0.50
     },
     'd': {
-        inherit: 'tc'
+        inherit: 'tc',
+        size: 0.45
     },
     'D': {
-        inherit: 'stc'
+        inherit: 'stc',
+        size: 0.50
     },
     's': {
         inherit: 'tc',
         pressure: 995,
-        windSpeed: 45
+        windSpeed: 45,
+        size: 0.50
     },
     'S': {
         inherit: 'stc',
         pressure: 995,
-        windSpeed: 45
+        windSpeed: 45,
+        size: 0.55
     },
     '1': {
         inherit: 'tc',
         pressure: 985,
-        windSpeed: 70
+        windSpeed: 70,
+        size: 0.55
     },
     '2': {
         inherit: 'tc',
         pressure: 975,
-        windSpeed: 90
+        windSpeed: 90,
+        size: 0.60
     },
     '3': {
         inherit: 'tc',
         pressure: 960,
-        windSpeed: 105
+        windSpeed: 105,
+        size: 0.65
     },
     '4': {
         inherit: 'tc',
         pressure: 945,
-        windSpeed: 125
+        windSpeed: 125,
+        size: 0.72
     },
     '5': {
         inherit: 'tc',
         pressure: 925,
-        windSpeed: 145
+        windSpeed: 145,
+        size: 0.80
     },
     '6': {
         inherit: 'tc',
         pressure: 890,
-        windSpeed: 170
+        windSpeed: 170,
+        size: 0.85
     },
     '7': {
         inherit: 'tc',
         pressure: 840,
-        windSpeed: 210
+        windSpeed: 210,
+        size: 0.90
     },
     '8': {
         inherit: 'tc',
         pressure: 800,
-        windSpeed: 270
+        windSpeed: 270,
+        size: 0.95
     },
     '9': {
         inherit: 'tc',
         pressure: 765,
-        windSpeed: 330
+        windSpeed: 330,
+        size: 0.98
     },
     '0': {
         inherit: 'tc',
         pressure: 730,
-        windSpeed: 400
+        windSpeed: 400,
+        size: 1.0
     },
     'y': {
         inherit: 'tc',
         pressure: 690,
-        windSpeed: 440
+        windSpeed: 440,
+        size: 1.0
     },
     'monsoonLow': {
         pressure: [1004, 1012],
@@ -202,7 +227,8 @@ SPAWN_RULES.defaults.archetypes = {
         upperWarmCore: [0.55, 0.8],
         depth: [0, 0.2],
 
-        genesisProgress: 0
+        genesisProgress: 0,
+        size: [0.4, 0.65]
     }
 };
 
@@ -1495,11 +1521,23 @@ STORM_ALGORITHM.defaults.core = function(sys,u){
     sys.lowerWarmCore = constrain(sys.lowerWarmCore,0,1);
     sys.upperWarmCore = constrain(sys.upperWarmCore,0,1);
 
+    if (sys.landTropicalGrace === undefined) sys.landTropicalGrace = 0;
+    const stDefaults = sys.fetchStorm && sys.fetchStorm();
+    const priorTCDefaults = stDefaults && stDefaults.TC;
+    const coordDefaults = Coordinate.convertFromXY(sys.basin.mapType, sys.pos.x, sys.pos.y);
+    const lowLatDefaults = Math.abs(coordDefaults.latitude) < 30;
+
+    if (landExposure > 0.45 && priorTCDefaults && lowLatDefaults) {
+        sys.landTropicalGrace += 1;
+    } else if (landExposure <= 0.45) {
+        sys.landTropicalGrace = max(0, sys.landTropicalGrace - 2);
+    }
+
     if(landExposure > 0.45){
         const terrainFactor = map(landExposure, 0.45, 0.85, 1, 3, true);
-        const coreDecay = 0.02 * terrainFactor;
+        const coreDecay = 0.012 * terrainFactor;
         sys.lowerWarmCore = lerp(sys.lowerWarmCore, 0, coreDecay);
-        sys.upperWarmCore = lerp(sys.upperWarmCore, sys.lowerWarmCore, 0.05);
+        sys.upperWarmCore = lerp(sys.upperWarmCore, 0, coreDecay * 0.5);
     }
 
     let tropicalness = constrain(map(sys.lowerWarmCore,0.5,1,0,1),0,sys.upperWarmCore);
@@ -1518,7 +1556,7 @@ STORM_ALGORITHM.defaults.core = function(sys,u){
 
     if(landExposure > 0.45){
         const terrainFactor = map(landExposure, 0.45, 0.85, 1, 3, true);
-        sys.organization = lerp(sys.organization, 0, 0.05 * terrainFactor);
+        sys.organization = lerp(sys.organization, 0, 0.03 * terrainFactor);
     }
 
     const isHyper = sys.basin.actMode === SIM_MODE_HYPER;
@@ -1534,7 +1572,7 @@ STORM_ALGORITHM.defaults.core = function(sys,u){
     const potentialPressure = lerp(1010, minimumPotentialPressure, pow(heat, 1.4));
     let targetPressure = landExposure > 0.45 ? 1010 : lerp(1010, potentialPressure, pow(sys.organization, 3));
     if(landExposure > 0.45){
-        const fillRate = 0.06 * map(landExposure, 0.45, 0.85, 1, 2.2, true);
+        const fillRate = 0.04 * map(landExposure, 0.45, 0.85, 1, 2.2, true);
         sys.pressure = lerp(sys.pressure, 1010, fillRate);
     }else{
         sys.pressure = lerp(sys.pressure, targetPressure,
@@ -1590,6 +1628,24 @@ STORM_ALGORITHM.defaults.core = function(sys,u){
         )
     );
     sys.depth = lerp(sys.depth,targetDepth,0.05);
+
+    if(sys.size === undefined || !Number.isFinite(sys.size)) sys.size = 0.35;
+    const openOceanDefaults = landExposure <= 0.45;
+    const pressureScaleDefaults = constrain(map(sys.pressure, 1010, 900, 0, 1), 0, 1);
+    const windScaleDefaults = constrain(map(sys.windSpeed, 25, 150, 0, 1), 0, 1);
+    let targetSizeDefaults = 0.25 + 0.3 * pressureScaleDefaults + 0.25 * windScaleDefaults + 0.2 * constrain(sys.organization, 0, 1);
+    targetSizeDefaults = constrain(targetSizeDefaults, 0.2, 1);
+
+    if(landExposure > 0.45){
+        const terrainFactor = map(landExposure, 0.45, 0.85, 1, 3, true);
+        const targetLandSize = max(0.35, sys.size - 0.03 * terrainFactor);
+        sys.size = lerp(sys.size, targetLandSize, 0.04);
+    } else if(landExposure > 0 && landExposure <= 0.45){
+        sys.size = min(1, sys.size + 0.001);
+    } else {
+        const sizeResponse = openOceanDefaults ? 0.015 : 0.04;
+        sys.size = lerp(sys.size, targetSizeDefaults, sizeResponse);
+    }
 
     if(sys.genesisProgress === undefined)
         sys.genesisProgress = (sys.type === TROP || sys.type === SUBTROP) ? 1 : 0;
@@ -1679,11 +1735,23 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].core = function(sys,u){
     sys.lowerWarmCore = constrain(sys.lowerWarmCore,0,1);
     sys.upperWarmCore = constrain(sys.upperWarmCore,0,1);
 
+    if (sys.landTropicalGrace === undefined) sys.landTropicalGrace = 0;
+    const stExp = sys.fetchStorm && sys.fetchStorm();
+    const priorTCExp = stExp && stExp.TC;
+    const coordExp = Coordinate.convertFromXY(sys.basin.mapType, sys.pos.x, sys.pos.y);
+    const lowLatExp = Math.abs(coordExp.latitude) < 30;
+
+    if (landExposure > 0.45 && priorTCExp && lowLatExp) {
+        sys.landTropicalGrace += 1;
+    } else if (landExposure <= 0.45) {
+        sys.landTropicalGrace = max(0, sys.landTropicalGrace - 2);
+    }
+
     if(landExposure > 0.45){
         const terrainFactor = map(landExposure, 0.45, 0.85, 1, 3, true);
-        const coreDecay = 0.02 * terrainFactor;
+        const coreDecay = 0.012 * terrainFactor;
         sys.lowerWarmCore = lerp(sys.lowerWarmCore, 0, coreDecay);
-        sys.upperWarmCore = lerp(sys.upperWarmCore, sys.lowerWarmCore, 0.05);
+        sys.upperWarmCore = lerp(sys.upperWarmCore, 0, coreDecay * 0.5);
     }
 
     let tropicalness = (sys.lowerWarmCore+sys.upperWarmCore)/2;
@@ -1693,7 +1761,7 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].core = function(sys,u){
     sys.organization = lerp(sys.organization,0,pow(3,shear*(1-moisture)*2.3)*0.0005);
     if(landExposure > 0.45) {
         const terrainFactor = map(landExposure, 0.45, 0.85, 1, 3, true);
-        sys.organization = lerp(sys.organization, 0, 0.05 * terrainFactor);
+        sys.organization = lerp(sys.organization, 0, 0.03 * terrainFactor);
     }
     sys.organization = constrain(sys.organization,0,1);
 
@@ -1748,6 +1816,24 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].core = function(sys,u){
     sys.depth = lerp(sys.depth,1,(1-tropicalness)*0.02);
     sys.depth = lerp(sys.depth,0,tropicalness*(1-sys.organization)*0.02);
     sys.depth = lerp(sys.depth,lnd ? 0.5 : map(SST,26,29,0.5,0.65,true),tropicalness*sys.organization*0.025);
+
+    if(sys.size === undefined || !Number.isFinite(sys.size)) sys.size = 0.35;
+    const openOceanExp = landExposure <= 0.45;
+    const pressureScaleExp = constrain(map(sys.pressure, 1010, 900, 0, 1), 0, 1);
+    const windScaleExp = constrain(map(sys.windSpeed, 25, 150, 0, 1), 0, 1);
+    let targetSizeExp = 0.25 + 0.3 * pressureScaleExp + 0.25 * windScaleExp + 0.2 * constrain(sys.organization, 0, 1);
+    targetSizeExp = constrain(targetSizeExp, 0.2, 1);
+
+    if(landExposure > 0.45){
+        const terrainFactor = map(landExposure, 0.45, 0.85, 1, 3, true);
+        const targetLandSize = max(0.35, sys.size - 0.03 * terrainFactor);
+        sys.size = lerp(sys.size, targetLandSize, 0.04);
+    } else if(landExposure > 0 && landExposure <= 0.45){
+        sys.size = min(1, sys.size + 0.001);
+    } else {
+        const sizeResponse = openOceanExp ? 0.015 : 0.04;
+        sys.size = lerp(sys.size, targetSizeExp, sizeResponse);
+    }
 
     if(sys.genesisProgress === undefined)
         sys.genesisProgress = (sys.type === TROP || sys.type === SUBTROP) ? 1 : 0;
@@ -1880,11 +1966,33 @@ STORM_ALGORITHM.defaults.typeDetermination = function(sys,u){
 
     const canForm = canTropicalCycloneForm(sys);
     const lnd = u ? u.land() : 0;
-    const warmCoreFloor = lnd ? 0.45 : 0.55;
-    const upperFloorT = lnd ? 0.50 : 0.56;
-    const upperFloorS = lnd ? 0.51 : 0.57;
-    const orgThresh = lnd ? 0.25 : 0.4;
+    const nearLnd = u && u.nearbyLand ? u.nearbyLand() : lnd;
+    const lndVal = typeof lnd === 'number' ? lnd : (lnd ? 1 : 0);
+    const nearLndVal = typeof nearLnd === 'number' ? nearLnd : (nearLnd ? 1 : 0);
+    const landExposure = max(lndVal, nearLndVal * 0.6);
+    const onLand = landExposure > 0.45;
 
+    const stDet = sys.fetchStorm && sys.fetchStorm();
+    const priorTCDet = stDet && stDet.TC;
+    const coordDet = Coordinate.convertFromXY(sys.basin.mapType, sys.pos.x, sys.pos.y);
+    const lowLatDet = Math.abs(coordDet.latitude) < 30;
+
+    const grace = priorTCDet && lowLatDet && onLand && (sys.landTropicalGrace || 0) < 30;
+
+    if (grace && (sys.type === TROP || sys.type === SUBTROP || sys.type === TROPWAVE)) {
+        if (sys.lowerWarmCore >= 0.35 && sys.windSpeed >= 20) {
+            sys.type = TROP;
+            enforceStormStateConsistency(sys);
+            return;
+        }
+    }
+
+    const warmCoreFloor = onLand ? 0.45 : 0.55;
+    const upperFloorT = onLand ? 0.50 : 0.56;
+    const upperFloorS = onLand ? 0.51 : 0.57;
+    const orgThresh = onLand ? 0.25 : 0.4;
+
+    const oldType = sys.type;
     switch(sys.type){
         case TROP:
             sys.type = sys.lowerWarmCore < warmCoreFloor ? EXTROP : ((sys.organization < orgThresh && sys.windSpeed < 50) || sys.windSpeed < 20) ? (sys.upperWarmCore < upperFloorT ? EXTROP : TROPWAVE) : (sys.upperWarmCore < upperFloorT ? SUBTROP : TROP);
@@ -1913,6 +2021,10 @@ STORM_ALGORITHM.defaults.typeDetermination = function(sys,u){
                 sys.type = TROP;
     }
 
+    if((oldType === TROP || oldType === SUBTROP) && sys.type === EXTROP){
+        sys.size = min(1, (sys.size || 0.4) + 0.15);
+    }
+
     enforceStormStateConsistency(sys);
 };
 
@@ -1920,12 +2032,12 @@ STORM_ALGORITHM.defaults.typeDetermination = function(sys,u){
 // Version number of a simulation mode's storm algorithm
 // Used for upgrading the active attribute values if needed
 
-STORM_ALGORITHM[SIM_MODE_NORMAL].version = 3;
-STORM_ALGORITHM[SIM_MODE_HYPER].version = 3;
-STORM_ALGORITHM[SIM_MODE_WILD].version = 3;
-STORM_ALGORITHM[SIM_MODE_MEGABLOBS].version = 3;
-STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].version = 4;
-STORM_ALGORITHM[SIM_MODE_SPOOKY].version = 3;
+STORM_ALGORITHM[SIM_MODE_NORMAL].version = 4;
+STORM_ALGORITHM[SIM_MODE_HYPER].version = 4;
+STORM_ALGORITHM[SIM_MODE_WILD].version = 4;
+STORM_ALGORITHM[SIM_MODE_MEGABLOBS].version = 4;
+STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].version = 5;
+STORM_ALGORITHM[SIM_MODE_SPOOKY].version = 4;
 
 // -- Upgrade -- //
 // Converts active attributes in case an active system is loaded after an algorithm change breaks old values
@@ -1953,6 +2065,9 @@ STORM_ALGORITHM[SIM_MODE_SPOOKY].upgrade = function(sys,data,oldVersion){
         sys.riTimer = data.riTimer || 0;
         sys.riCooldown = data.riCooldown || 0;
     }
+    if(oldVersion < 4){
+        sys.size = data.size !== undefined ? data.size : (sys.type === EXTROP ? 0.55 : 0.35);
+    }
 };
 
 STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].upgrade = function(sys,data,oldVersion){
@@ -1974,6 +2089,9 @@ STORM_ALGORITHM[SIM_MODE_EXPERIMENTAL].upgrade = function(sys,data,oldVersion){
         sys.riActive = data.riActive || 0;
         sys.riTimer = data.riTimer || 0;
         sys.riCooldown = data.riCooldown || 0;
+    }
+    if(oldVersion < 5){
+        sys.size = data.size !== undefined ? data.size : (sys.type === EXTROP ? 0.55 : 0.35);
     }
 };
 

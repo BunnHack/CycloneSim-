@@ -222,6 +222,8 @@ class Storm{
             let timestamp = performance.now();
             this.rotation -= 0.001 * (timestamp - this.rotationUpdateTimestamp) * pow(1.0115, min(270,st));
             this.rotationUpdateTimestamp = timestamp;
+            let sz = (advX && typeof advX.size === 'number') ? advX.size : (typeof this.size === 'number' ? this.size : 0.45);
+            let iconScale = map(constrain(sz, 0.2, 1), 0.2, 1, 0.88, 1.22);
             let drawArms = ()=>{
                 let a = scaleIconData.arms;
                 if(tropOrSub(ty) && a){
@@ -247,16 +249,22 @@ class Storm{
             if(selectedStorm===this){
                 stormIcons.noFill();
                 stormIcons.stroke(255);
+                stormIcons.push();
+                stormIcons.scale(iconScale);
                 if(ty===EXTROP){
                     stormIcons.textSize(18);
                     stormIcons.text("L",0,0);
                 }else stormIcons.ellipse(0,0,DIAMETER);
                 drawArms();
+                stormIcons.pop();
             }
             stormIcons.fill(scaleIconData.color);
             stormIcons.noStroke();
+            stormIcons.push();
+            stormIcons.scale(iconScale);
             if(ty!==EXTROP) stormIcons.ellipse(0,0,DIAMETER);
             drawArms();
+            stormIcons.pop();
             if(ty===EXTROP){
                 stormIcons.fill(COLORS.storm.extL);
                 stormIcons.textSize(18);
@@ -928,19 +936,27 @@ class StormData{
     }
 }
 
-function nearbyLand(basin, x, y){
+function nearbyLand(basin, x, y, radius){
     if(!land) return 0;
+    radius = radius === undefined ? 60 : radius;
+    let sum = 0;
     let maxV = 0;
+    let count = 0;
     for(let a = 0; a < 8; a++){
         const ang = a * Math.PI / 4;
-        const nx = x + 60 * Math.cos(ang);
-        const ny = y + 60 * Math.sin(ang);
+        const nx = x + radius * Math.cos(ang);
+        const ny = y + radius * Math.sin(ang);
+        if(nx < 0 || nx >= WIDTH || ny < 0 || ny >= HEIGHT) continue;
         const c = Coordinate.convertFromXY(basin.mapType, nx, ny);
         const v = land.get(c);
         let val = typeof v === 'number' ? v : (v ? 1 : 0);
+        sum += val;
         if(val > maxV) maxV = val;
+        count++;
     }
-    return maxV;
+    if(count === 0) return 0;
+    const avg = sum / count;
+    return 0.7 * avg + 0.3 * maxV;
 }
 
 class ActiveSystem extends StormData{
@@ -1069,7 +1085,9 @@ class ActiveSystem extends StormData{
             this.type = d.type===undefined ? EXTROP : d.type;
             let activeAttribs = ACTIVE_ATTRIBS[basin.actMode] || ACTIVE_ATTRIBS.defaults;
             for(let v of activeAttribs)
-                this[v] = d[v] || 0;
+                this[v] = d[v] !== undefined ? d[v] : 0;
+            if(d.size === undefined && (!this.size || this.size === 0))
+                this.size = this.type === EXTROP ? 0.55 : 0.35;
             this.storm = new Storm(basin,this);
             if(basin.tick%ADVISORY_TICKS===0) this.advisory();
         }
@@ -1081,7 +1099,11 @@ class ActiveSystem extends StormData{
         let u = {};
         u.f = (field)=>basin.env.get(field,this.pos.x,this.pos.y,basin.tick);
         u.land = ()=>land ? land.get(this.coord()) : false;
-        u.nearbyLand = ()=>nearbyLand(basin,this.pos.x,this.pos.y);
+        u.nearbyLand = ()=>{
+            const sz = typeof this.size === 'number' ? this.size : 0.35;
+            const radius = map(constrain(sz, 0.2, 1), 0.2, 1, 35, 100);
+            return nearbyLand(basin, this.pos.x, this.pos.y, radius);
+        };
 
         // this.getSteering();
         if(STORM_ALGORITHM[basin.actMode].steering)
@@ -1188,6 +1210,11 @@ class ActiveSystem extends StormData{
             let pop = lnd ? round(250000*(1+basin.hemY(y)/HEIGHT)*pow(0.8,map(lnd,0.5,1,0,30))) : 0;
             let damPot = pow(1.062,this.windSpeed)-1;   // damage potential
             let dedPot = pow(1.045,this.windSpeed)-1;    // death potential
+            const stormSize = constrain(this.size || 0.35, 0.2, 1);
+            const sizeDamageFactor = map(stormSize, 0.2, 1, 0.65, 1.8);
+            const sizeDeathFactor = map(stormSize, 0.2, 1, 0.75, 1.35);
+            damPot *= sizeDamageFactor;
+            dedPot *= sizeDeathFactor;
             let m = pow(1.5,randomGaussian());      // modifier
             damPot *= m;
             dedPot *= m;
